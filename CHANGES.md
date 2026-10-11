@@ -1,6 +1,6 @@
 # Penny Royal release history
 
-## 3.0.1 — PLE startup and container cache fixes (draft)
+## 3.0.1 — PLE startup and container cache fixes
 
 Fix WSL2 RAM PLE device pointers, keep TileLang kernels in the persistent cache
 for custom container UIDs, and refresh the NVMe PLE reader's source guard.

@@ -1,7 +1,5 @@
 # Penny Royal 3.0.1
 
-Draft — publication and container checks pending.
-
 This maintenance release fixes three startup problems reported after 3.0 and
 adds the Penny Royal version to startup logs.
 
