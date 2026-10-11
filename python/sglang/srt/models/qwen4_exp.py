@@ -1,5 +1,6 @@
 """Inference-only Qwen4-Exp (text + VL) on the Qwen3.5 backbone."""
 
+import ctypes
 import math
 import mmap
 from contextlib import nullcontext
@@ -767,35 +768,122 @@ def _gather_ple_embedding_from_pinned_kernel(
 _PINNED_TABLE_BUFFERS: list = []
 _CUDA_HOST_REGISTER_PORTABLE_MAPPED = 0x01 | 0x02
 
+# ponytail: only the runtime *function* is cached here, never an address, so
+# no entry can outlive the registration it describes.
+_PinnedDevicePtrFn = None
 
-def _allocate_pinned_table(shape: Tuple[int, ...], dtype: torch.dtype) -> torch.Tensor:
+
+def _pinned_host_device_ptr(host_ptr: int) -> int:
+    """Device-visible alias of this process' cudaHostRegister'd host pointer.
+
+    Same mechanism and fail-loud posture as ``pinned_host_device_ptr`` in
+    ``kernels/jit/csrc/kvcacheio/transfer_mamba.cuh`` (the issue #24 fix):
+    ``cudaHostGetDevicePointer`` returns the host address itself where the
+    device may use host pointers for registered memory (native Linux UVA)
+    and a distinct alias on WSL2. Memory registered with the Mapped flag is
+    documented to always resolve, so any error here — or a null alias for a
+    nonempty registered table — is raised instead of silently falling back
+    to an address the kernel may not be able to read. The alias is scoped
+    to the CUDA device that is current for this call; it is resolved once
+    at registration, on the rank's model device, and then travels with the
+    allocation (issue #64).
+
+    The runtime is resolved through the extension module PyTorch itself
+    loaded (``dlsym`` walks its dependency graph, so this covers both
+    statically linked and dynamically linked CUDA builds and cannot pick a
+    different runtime's current-device context), with the soname matching
+    torch's own CUDA/ROCm version as fallback; no first-found sweep over
+    unrelated installed runtimes.
+    """
+    global _PinnedDevicePtrFn
+    if _PinnedDevicePtrFn is None:
+        candidates = [torch._C.__file__]
+        if torch.version.cuda:
+            candidates.append(f"libcudart.so.{torch.version.cuda.split('.')[0]}")
+        elif torch.version.hip:
+            candidates.append("libamdhip64.so")
+        fn = None
+        for name in candidates:
+            try:
+                namespace = ctypes.CDLL(name)
+            except OSError:
+                continue
+            for symbol in ("cudaHostGetDevicePointer", "hipHostGetDevicePointer"):
+                fn = getattr(namespace, symbol, None)
+                if fn is not None:
+                    break
+            if fn is not None:
+                break
+        if fn is None:
+            raise RuntimeError(
+                "cannot resolve cudaHostGetDevicePointer in the CUDA/ROCm "
+                "runtime PyTorch loaded (issue #64)"
+            )
+        fn.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_uint]
+        fn.restype = ctypes.c_int
+        _PinnedDevicePtrFn = fn
+    device_ptr = ctypes.c_void_p()
+    err = _PinnedDevicePtrFn(ctypes.byref(device_ptr), ctypes.c_void_p(host_ptr), 0)
+    if int(err) != 0 or not device_ptr.value:
+        raise RuntimeError(
+            f"cudaHostGetDevicePointer could not resolve the device alias of "
+            f"the registered PLE host table at {host_ptr:#x}: error {int(err)}"
+        )
+    return int(device_ptr.value)
+
+
+def _allocate_pinned_table(
+    shape: Tuple[int, ...], dtype: torch.dtype
+) -> Tuple[torch.Tensor, int]:
     """Page-locked host tensor that locks exactly ``shape``/``dtype`` bytes.
 
     ``torch.empty(..., pin_memory=True)`` goes through the caching host
     allocator, which rounds the request up to the next power of two; the
     47.68 GiB fp8 Flash-Next table would lock 64 GiB (a bf16 table 128 GiB)
     of unreclaimable host memory (sgl-project/sglang#40626). Map anonymous
-    memory of the exact size and register it with CUDA instead; the result is
-    pinned and device-accessible through the same host-pointer semantics the
-    Triton gathers already rely on.
+    memory of the exact size and register it with CUDA instead.
+
+    Returns the table and the device address of the registration: WSL2
+    aliases ``cudaHostRegister``'d memory at an address distinct from the
+    host pointer, so the gathers must use the resolved alias, not
+    ``data_ptr()`` (issue #64). The alias is bound to the allocation below;
+    the mapping (and thus the alias' validity) spans the whole process.
     """
     shape = tuple(int(d) for d in shape)
     nbytes = math.prod(shape) * torch.empty(0, dtype=dtype).element_size()
     if nbytes == 0:
-        return torch.empty(shape, dtype=dtype, device="cpu", pin_memory=True)
+        empty_table = torch.empty(shape, dtype=dtype, device="cpu", pin_memory=True)
+        return empty_table, empty_table.data_ptr()
     buf = mmap.mmap(-1, nbytes, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)
     raw = torch.frombuffer(buf, dtype=torch.uint8)
+    registered = False
     try:
         err = torch.cuda.cudart().cudaHostRegister(
             raw.data_ptr(), nbytes, _CUDA_HOST_REGISTER_PORTABLE_MAPPED
         )
         if int(err) != 0:
             raise RuntimeError(f"cudaHostRegister failed: {err}")
+        registered = True
+        device_ptr = _pinned_host_device_ptr(raw.data_ptr())
     except Exception:
+        if registered:
+            # The alias lookup failed on an otherwise successfully registered
+            # table: undo the registration before releasing the mapping, so
+            # the runtime never holds a registration over unmapped pages.
+            unreg = torch.cuda.cudart().cudaHostUnregister(raw.data_ptr())
+            if int(unreg) != 0:
+                logger.warning(
+                    "cudaHostUnregister failed (error %d) while unwinding the "
+                    "PLE host table at %#x after alias resolution failed; the "
+                    "mapping below still closes, so the driver drops the "
+                    "registration with the pages",
+                    int(unreg),
+                    raw.data_ptr(),
+                )
         buf.close()
         raise
     _PINNED_TABLE_BUFFERS.append(buf)
-    return raw.view(dtype).view(shape)
+    return raw.view(dtype).view(shape), device_ptr
 
 
 class Qwen4ExpPinnedHostEmbedding(VocabParallelEmbedding):
@@ -849,17 +937,23 @@ class Qwen4ExpPinnedHostEmbedding(VocabParallelEmbedding):
 
         source_weight = embedding.weight
         try:
-            cpu_weight = nn.Parameter(
-                _allocate_pinned_table(source_weight.shape, source_weight.dtype),
-                requires_grad=False,
+            host_table, device_ptr = _allocate_pinned_table(
+                source_weight.shape, source_weight.dtype
             )
         except Exception as exc:
             raise RuntimeError(
                 "unable to page-lock the PLE host table "
                 f"{tuple(source_weight.shape)}/{source_weight.dtype}: {exc}"
             ) from exc
+        cpu_weight = nn.Parameter(host_table, requires_grad=False)
         for name, value in vars(source_weight).items():
             setattr(cpu_weight, name, value)
+        # nn.Parameter wrapping drops tensor attributes, so bind the device
+        # alias of this registration to the Parameter the gathers read
+        # (issue #64); qwen4_ple.pinned_gather_ptr consumes it on the fused
+        # path and the pinned gather below keeps its own resolved copy.
+        cpu_weight._ple_device_ptr = device_ptr
+        self._gather_weight_ptr = device_ptr
         cpu_weight.weight_loader = self.weight_loader
         self.register_parameter("weight", cpu_weight)
         # The scale is tiny; keep it with the model instead of offloading it
@@ -902,7 +996,7 @@ class Qwen4ExpPinnedHostEmbedding(VocabParallelEmbedding):
         flat_ids = input_ids.reshape(-1).long()
         if flat_ids.numel():
             _gather_ple_embedding_from_pinned_kernel[(flat_ids.numel(),)](
-                self.weight.data_ptr(),
+                self._gather_weight_ptr,
                 flat_ids,
                 output,
                 embedding_dim=self.embedding_dim,

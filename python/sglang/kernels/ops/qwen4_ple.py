@@ -14,6 +14,19 @@ _QWEN4_HIDDEN_SIZE = 2560
 _QWEN4_MAX_SHORT_CONV_STATE_LEN = 16
 
 
+def pinned_gather_ptr(weight: torch.Tensor) -> int:
+    """Device address of a pinned host PLE table for the Triton gathers.
+
+    ``cudaHostRegister``'d tables (``qwen4_exp._allocate_pinned_table``,
+    issue #64) carry the alias resolved at registration in
+    ``_ple_device_ptr``: on WSL2 that alias differs from ``data_ptr()``, on
+    native Linux it is the host address itself. Tables allocated through
+    ``cudaHostAlloc`` (``torch`` pinned memory) stay device-visible at their
+    own UVA ``data_ptr()``, so they need no alias.
+    """
+    return getattr(weight, "_ple_device_ptr", None) or weight.data_ptr()
+
+
 @triton.jit
 def _round_bf16_to_fp32(value):
     """RNE-round fp32 to BF16 precision while retaining an fp32 register."""
@@ -247,7 +260,8 @@ def fused_qwen4_ngram_gather(
     """Hash and gather unscaled BF16 rows directly from a pinned host table.
 
     The caller owns the host allocation until execution completes (including
-    graph replays); its raw UVA pointer is not tracked by the CUDA allocator.
+    graph replays); the gather reads the device alias recorded when the table
+    was registered (issue #64), an address not tracked by the CUDA allocator.
     TP reduction and the checkpoint's per-tensor scale remain with the caller.
     """
     if not can_fuse_qwen4_ngram_hash(contexts, multipliers, vocab_sizes, offsets):
@@ -272,7 +286,7 @@ def fused_qwen4_ngram_gather(
             multipliers,
             vocab_sizes,
             offsets,
-            weight.data_ptr(),
+            pinned_gather_ptr(weight),
             out,
             eos_token_id,
             embedding_dim,

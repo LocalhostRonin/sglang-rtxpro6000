@@ -13,9 +13,12 @@ Covers the two adopted upstream fixes on the Penny base:
 
 Registration and ownership run against a recording ``cudaHostRegister`` so the
 contract is checkable without a GPU; the supervisor SM120 box re-runs this file
-against the real runtime. Non-offload construction (the NVMe PLE profile, whose
-plugin forces ``ple_offload_embedding=False``, and the 27B/DFlash2 recipe,
-which never enables it) is pinned to the unchanged device-resident path.
+against the real runtime. The device alias resolved at registration (issue
+#64) is injected through ``_pinned_host_device_ptr``; the WSL2 split-address
+and native equal-address cases are both pinned below. Non-offload construction
+(the NVMe PLE profile, whose plugin forces ``ple_offload_embedding=False``, and
+the 27B/DFlash2 recipe, which never enables it) is pinned to the unchanged
+device-resident path.
 """
 
 import gc
@@ -24,6 +27,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from sglang.kernels.ops import qwen4_ple as qwen4_ple_module
 from sglang.srt.configs.qwen4_exp import Qwen4ExpTextConfig
 from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
 from sglang.srt.models import qwen4_exp as qwen4_exp_module
@@ -57,6 +61,11 @@ def cudart(monkeypatch):
     recorder = RecordingCudart()
     monkeypatch.setattr(torch.cuda, "cudart", lambda: recorder)
     monkeypatch.setattr(torch.cuda, "Stream", lambda *args, **kwargs: SimpleNamespace())
+    # Native Linux default: cudaHostGetDevicePointer reports the host address
+    # itself. The WSL2 split is exercised by overwriting this in-place.
+    monkeypatch.setattr(
+        qwen4_exp_module, "_pinned_host_device_ptr", lambda ptr: ptr, raising=False
+    )
     del qwen4_exp_module._PINNED_TABLE_BUFFERS[:]
     yield recorder
     del qwen4_exp_module._PINNED_TABLE_BUFFERS[:]
@@ -289,3 +298,175 @@ def test_non_offload_profile_keeps_device_template_untouched(
     assert tracking_mmap == []
     assert qwen4_exp_module._PINNED_TABLE_BUFFERS == []
     assert layer._prefetch_stream is None
+
+
+class KernelLaunches:
+    """Records Triton-style ``kernel[(grid,)](*args, **kwargs)`` launches."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __getitem__(self, grid):
+        def launch(*args, **kwargs):
+            self.calls.append((tuple(grid), args, kwargs))
+
+        return launch
+
+
+WSL2_ALIAS_OFFSET = 0x2000_0000
+
+
+@pytest.fixture
+def wsl2_alias(monkeypatch):
+    """cudaHostGetDevicePointer resolving to an address distinct from host."""
+
+    monkeypatch.setattr(
+        qwen4_exp_module,
+        "_pinned_host_device_ptr",
+        lambda ptr: ptr + WSL2_ALIAS_OFFSET,
+    )
+
+
+def test_offload_resolves_device_alias_once_at_registration(
+    cudart, single_rank, monkeypatch
+):
+    resolutions = []
+    monkeypatch.setattr(
+        qwen4_exp_module,
+        "_pinned_host_device_ptr",
+        lambda ptr: resolutions.append(ptr) or ptr + WSL2_ALIAS_OFFSET,
+    )
+    layer = _build_layer(_config())
+    emb = layer.ple_embedding.ngram_embedding
+
+    # Exactly once, against the pointer that was just registered, on the
+    # rank's current device — no per-gather lookup, no process-global cache.
+    assert resolutions == [cudart.calls[0][0]]
+    assert emb._gather_weight_ptr == emb.weight.data_ptr() + WSL2_ALIAS_OFFSET
+    assert emb.weight._ple_device_ptr == emb._gather_weight_ptr
+    monkeypatch.setattr(
+        qwen4_exp_module, "_gather_ple_embedding_from_pinned_kernel", KernelLaunches()
+    )
+    emb.gather(torch.zeros((2,), dtype=torch.long))
+    assert resolutions == [cudart.calls[0][0]]
+
+
+def test_pinned_gather_passes_device_alias_on_wsl2(
+    cudart, single_rank, wsl2_alias, monkeypatch
+):
+    launches = KernelLaunches()
+    monkeypatch.setattr(
+        qwen4_exp_module, "_gather_ple_embedding_from_pinned_kernel", launches
+    )
+    layer = _build_layer(_config())
+    emb = layer.ple_embedding.ngram_embedding
+    emb.gather(torch.zeros((2,), dtype=torch.long))
+
+    (grid, args, kwargs), = launches.calls
+    assert grid == (2,)
+    # Issue #64: the kernel takes the device alias of the registration, not
+    # the host address; TP-local indexing and the output contract are intact.
+    assert args[0] == emb.weight.data_ptr() + WSL2_ALIAS_OFFSET
+    assert args[0] != cudart.calls[0][0]
+    assert kwargs["tp_vocab_start"] == emb.shard_indices.org_vocab_start_index
+    assert kwargs["tp_vocab_end"] == emb.shard_indices.org_vocab_end_index
+
+
+def test_pinned_gather_keeps_host_address_when_alias_matches(
+    cudart, single_rank, monkeypatch
+):
+    launches = KernelLaunches()
+    monkeypatch.setattr(
+        qwen4_exp_module, "_gather_ple_embedding_from_pinned_kernel", launches
+    )
+    layer = _build_layer(_config())
+    emb = layer.ple_embedding.ngram_embedding
+    emb.gather(torch.zeros((2,), dtype=torch.long))
+
+    (grid, args, kwargs), = launches.calls
+    # Native Linux (alias == host pointer): byte-identical to pre-#64 passing
+    # the registered host address, so the equal-pointer case is preserved.
+    assert args[0] == emb.weight.data_ptr() == cudart.calls[0][0]
+
+
+class _FakePinnedTable:
+    dtype = torch.float8_e4m3fn
+    ndim = 2
+
+    def __init__(self, shape, device_ptr, device):
+        self.shape = shape
+        self._device_ptr = device_ptr
+        self.device = device
+
+    def data_ptr(self):
+        return self._device_ptr
+
+    def is_contiguous(self):
+        return True
+
+    def is_pinned(self):
+        return True
+
+
+def test_fused_gather_uses_the_registered_alias(monkeypatch):
+    launches = KernelLaunches()
+    monkeypatch.setattr(qwen4_ple_module, "_qwen4_ngram_gather_kernel", launches)
+    monkeypatch.setattr(qwen4_ple_module, "can_fuse_qwen4_ngram_hash", lambda *a: True)
+    host = torch.device("cpu")
+    table = _FakePinnedTable((64, 160), 0x7000, host)
+    table._ple_device_ptr = 0x9000  # distinct alias as resolved on WSL2
+    contexts = SimpleNamespace(shape=(2, 3), device=host)
+    out = SimpleNamespace(
+        shape=(2, 16, 160), device=host, dtype=torch.bfloat16, is_contiguous=lambda: True
+    )
+
+    qwen4_ple_module.fused_qwen4_ngram_gather(
+        contexts, None, None, None, 1, table, 0, 64, out
+    )
+
+    (grid, args, kwargs), = launches.calls
+    assert grid == (32,)
+    # The fused gather's weight pointer slot is the alias, not the host address.
+    assert args[4] == 0x9000 != table.data_ptr()
+
+
+def test_pinned_gather_ptr_falls_back_to_uva_data_ptr():
+    # A cudaHostAlloc'd (torch pin_memory) table needs no alias and keeps
+    # using its own device-visible UVA address.
+    from sglang.kernels.ops.qwen4_ple import pinned_gather_ptr
+
+    plain = torch.zeros((4, 8), dtype=torch.bfloat16)
+    assert pinned_gather_ptr(plain) == plain.data_ptr()
+
+
+def test_alias_failure_after_registration_unregisters_before_close(
+    tracking_mmap, single_rank, monkeypatch
+):
+    events = []
+
+    class UnregisteringCudart(RecordingCudart):
+        def cudaHostRegister(self, ptr, nbytes, flags):
+            events.append(("register", int(ptr)))
+            return super().cudaHostRegister(ptr, nbytes, flags)
+
+        def cudaHostUnregister(self, ptr):
+            # The mapping must still be alive when the registration is undone.
+            events.append(("unregister", int(ptr), tracking_mmap[0].closed))
+            return 0
+
+    def no_alias(ptr):
+        raise RuntimeError("no device alias")
+
+    monkeypatch.setattr(torch.cuda, "cudart", lambda: UnregisteringCudart())
+    monkeypatch.setattr(torch.cuda, "Stream", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(qwen4_exp_module, "_pinned_host_device_ptr", no_alias)
+    del qwen4_exp_module._PINNED_TABLE_BUFFERS[:]
+
+    with pytest.raises(RuntimeError, match="unable to page-lock"):
+        _build_layer(_config())
+
+    assert [event[0] for event in events] == ["register", "unregister"]
+    assert events[1][1] == events[0][1]
+    assert events[1][2] is False, "unregister must precede closing the mapping"
+    assert tracking_mmap[0].closed
+    assert qwen4_exp_module._PINNED_TABLE_BUFFERS == []
