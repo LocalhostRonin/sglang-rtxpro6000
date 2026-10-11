@@ -237,7 +237,7 @@ def test_next_recipes_initialize_cache_environment_before_nvme_preflight(tmp_pat
 
 def test_source_guard_matches_every_hooked_publication_module():
     guard = json.loads(GUARD.read_text())
-    assert guard["source"].startswith("Pennyroyal v2.5.3")
+    assert guard["source"].startswith("Pennyroyal v3.0.1")
     assert "sglang.srt.models.qwen4_exp" in guard["modules"]
 
     for module, expected in guard["modules"].items():
