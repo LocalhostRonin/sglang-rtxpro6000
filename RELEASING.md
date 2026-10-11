@@ -72,6 +72,8 @@ without rebuilding it.
 
 Do this immediately after validation, before returning the service to normal use.
 
+- [ ] Bring the normal native checkout to the published main branch and install from it. Use stable environment and launcher paths; no live dependency on candidate or investigation directories. Keep private diagnostics explicitly separate from published defaults.
 - [ ] Restore Flash-Next with the agreed settings and local diagnostics enabled.
 - [ ] Confirm API readiness and diagnostic initialization; a launcher flag alone is insufficient.
+- [ ] Retire completed local release worktrees, candidate environments and temporary build artifacts after checking live references and uncommitted work. Preserve ongoing investigations and deliberate qualification results; name any cleanup still pending.
 - [ ] Report publication/build status and any remaining work.
