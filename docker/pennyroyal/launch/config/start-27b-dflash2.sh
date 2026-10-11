@@ -72,6 +72,9 @@ fi
 source "$IMAGE_CONFIGS/chat-template.sh"
 source "$IMAGE_CONFIGS/reasoning-effort.sh"
 source "$IMAGE_CONFIGS/tp-devices.sh"
+# Name the release and its source before any preflight step can fail.
+source "$IMAGE_CONFIGS/startup-summary.sh"
+pennyroyal_version_banner
 
 CONTEXT_LENGTH=524288
 PAGE_SIZE=64
@@ -238,6 +241,5 @@ launch_args=(serve \
   --speculative-draft-attention-backend flashinfer \
   --speculative-draft-kv-cache-dtype "$DRAFT_KV_DTYPE" \
   --watchdog-timeout 1800)
-source "$IMAGE_CONFIGS/startup-summary.sh"
 pennyroyal_startup_summary "${launch_args[@]}"
 exec "$SGLANG_EXE" "${launch_args[@]}"

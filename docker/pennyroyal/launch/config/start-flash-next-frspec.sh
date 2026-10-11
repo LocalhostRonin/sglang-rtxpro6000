@@ -91,6 +91,9 @@ source "$IMAGE_CONFIGS/chat-template.sh"
 source "$IMAGE_CONFIGS/request-capacity.sh"
 source "$IMAGE_CONFIGS/reasoning-effort.sh"
 source "$IMAGE_CONFIGS/tp-devices.sh"
+# Name the release and its source before any preflight step can fail.
+source "$IMAGE_CONFIGS/startup-summary.sh"
+pennyroyal_version_banner
 
 # Pin the qualified map and tokenizer: a different ID mapping changes draft
 # proposals and must never silently reuse this representation's cache namespace.
@@ -316,6 +319,5 @@ launch_args=(serve \
   --speculative-adaptive --speculative-adaptive-config "$ADAPTIVE_CONFIG" \
   --speculative-draft-model-quantization unquant \
   --speculative-token-map "$TOKEN_MAP" --watchdog-timeout 1800)
-source "$IMAGE_CONFIGS/startup-summary.sh"
 pennyroyal_startup_summary "${launch_args[@]}"
 exec "$SGLANG_EXE" "${launch_args[@]}"

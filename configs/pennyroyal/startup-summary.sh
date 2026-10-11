@@ -1,4 +1,32 @@
 #!/usr/bin/env bash
+# Product identity: what release is starting and which source it came from.
+# Every launch path calls this before its first preflight step, so a launch that
+# dies later still says what it was. The release comes from the version asset
+# beside this file, never from a Git tag (a shallow SHA-based container checkout
+# has none) and never from the SGLang package version, whose 0.5.x number is
+# upstream's own. The revision is the checkout's HEAD, and locally modified
+# source is named as such instead of claiming a clean release.
+pennyroyal_version_banner() {
+  local root="${REPO_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)}"
+  local version revision state asset
+  # The asset ships beside this file, so a REPO_ROOT that points elsewhere (or
+  # at nothing) still reports the release the launcher itself came with.
+  asset="$root/configs/pennyroyal/pennyroyal.version"
+  [[ -r "$asset" ]] || asset="$(dirname -- "${BASH_SOURCE[0]}")/pennyroyal.version"
+  version="$(sed -n '1p' "$asset" 2>/dev/null || true)"
+  [[ -n "$version" ]] || version='unknown'
+  revision="$(git -C "$root" rev-parse --short=10 HEAD 2>/dev/null || true)"
+  if [[ -z "$revision" ]]; then
+    state='source revision unavailable'
+  else
+    state="source $revision"
+    if [[ -n "$(git -C "$root" status --porcelain --untracked-files=no 2>/dev/null || true)" ]]; then
+      state="$state, locally modified"
+    fi
+  fi
+  printf 'Penny Royal %s | %s\n' "$version" "$state"
+}
+
 # Display the arguments we will actually exec, not a second set of defaults.
 # Allocation/admission can still be clamped during SGLang initialization.
 pennyroyal_startup_summary() {

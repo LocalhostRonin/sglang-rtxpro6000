@@ -58,6 +58,9 @@ source "$SCRIPT_DIR/chat-template.sh"
 source "$SCRIPT_DIR/request-capacity.sh"
 source "$SCRIPT_DIR/reasoning-effort.sh"
 source "$SCRIPT_DIR/tp-devices.sh"
+# Name the release and its source before any preflight step can fail.
+source "$SCRIPT_DIR/startup-summary.sh"
+pennyroyal_version_banner
 
 CONTEXT_LENGTH=524288
 # The approved adaptive MTP width policy (C1 picks W4/W8 = steps 3/7, C2+
@@ -247,6 +250,5 @@ launch_args=(serve \
   --speculative-eagle-topk 1 --speculative-num-draft-tokens 8 \
   --speculative-adaptive --speculative-adaptive-config "$ADAPTIVE_CONFIG" \
   --speculative-draft-model-quantization unquant --watchdog-timeout 1800)
-source "$SCRIPT_DIR/startup-summary.sh"
 pennyroyal_startup_summary "${launch_args[@]}"
 exec "$SGLANG_EXE" "${launch_args[@]}"

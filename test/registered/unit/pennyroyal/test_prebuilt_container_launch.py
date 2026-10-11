@@ -24,6 +24,7 @@ LAUNCH = REPO / "docker" / "pennyroyal" / "launch"
 ENTRYPOINT = REPO / "docker" / "pennyroyal" / "entrypoint.sh"
 CONFIGS = LAUNCH / "config"
 RECIPES = REPO / "configs" / "pennyroyal"
+PENNY_VERSION = (RECIPES / "pennyroyal.version").read_text().strip()
 # Never inherited from the developer's shell: these are exactly what each test
 # decides, so a stray export cannot change the expected launch.
 CONTROLLED = (
@@ -681,6 +682,33 @@ def test_tilelang_kernels_stay_on_the_durable_mount(tmp_path):
         assert result.returncode == 0, result.stderr
         assert server_env["tilelang"] == str(chosen), server_env
         assert chosen.is_dir()
+
+
+def test_startup_names_the_release_once_on_every_route(tmp_path):
+    # Where an operator looks when a launch dies in preflight: the release and
+    # its source, once, before any preflight step, on the mounted container route
+    # and the native recipe route, for both model profiles. The stand-in image
+    # root is a tagless single-commit checkout, like the published image.
+    for startup, recipe in (
+        ("start-flash-next.sh", RECIPES / "serve-flash-next.sh"),
+        ("start-27b-dflash2.sh", RECIPES / "serve-qwen38-27b-dflash2.sh"),
+    ):
+        config = prepared_config(tmp_path, startup)
+        for path, via_entrypoint in ((config / startup, True), (recipe, False)):
+            result, _, _, (root, _, _) = launch(
+                tmp_path, path, through_entrypoint=via_entrypoint
+            )
+            assert result.returncode == 0, (path, result.stderr)
+            revision = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "--short=10", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            banner = f"Penny Royal {PENNY_VERSION} | source {revision}"
+            lines = result.stdout.splitlines()
+            assert lines[0] == banner, (path, lines[:3])
+            assert lines.count(banner) == 1, (path, result.stdout)
 
 
 def test_mounted_startup_27b_keeps_its_profile(tmp_path):
