@@ -18,6 +18,16 @@ for optional in PENNY_REASONING_EFFORT TP_SIZE NCCL_P2P_DISABLE; do
   if [[ -z ${!optional:-} ]]; then unset "$optional"; fi
 done
 
+# TileLang keeps its compiled kernels under $HOME unless told otherwise, and
+# runc gives a UID with no passwd entry HOME=/, so its default lands on an
+# unwritable /.tilelang and the import aborts (#65). Route it onto the durable
+# mount before any route dispatches, so an exec'd startup script inherits the
+# same answer as a built-in profile; CACHE_BASE defaults to /cache above, so the
+# untouched image still keeps its kernels on the /cache mount. Nothing bakes a
+# value into the image: an explicit operator path must always be the operator's,
+# and a baked default could not be told apart from one.
+export TILELANG_CACHE_DIR="${TILELANG_CACHE_DIR:-$CACHE_BASE/tilelang}"
+
 profile="${1:-next}"
 if (( $# )); then shift; fi
 case "$profile" in
@@ -48,6 +58,9 @@ for directory in "$CACHE_BASE" "$NIXL_STORAGE_BASE"; do
     exit 1
   fi
 done
+# The kernels directory is part of the durable mount, so it is prepared once the
+# roots above have been checked writable (a missing mount keeps its own error).
+mkdir -p "$TILELANG_CACHE_DIR"
 # Docker/NVIDIA select the permitted host GPUs. Preserve all of those logical
 # devices so an optional cuda:1 media processor is not hidden by the recipes'
 # native single-GPU default. An explicit CUDA_VISIBLE_DEVICES still wins.

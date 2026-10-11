@@ -204,6 +204,8 @@ def test_next_recipes_initialize_cache_environment_before_nvme_preflight(tmp_pat
         '[[ "$SGLANG_CACHE_DIR" == "$CACHE_BASE/sglang" ]]\n'
         '[[ "$SGLANG_JIT_CACHE_DIR" == "$CACHE_BASE/sglang/jit" ]]\n'
         '[[ -d "$SGLANG_JIT_CACHE_DIR" ]]\n'
+        '[[ "$TILELANG_CACHE_DIR" == "$CACHE_BASE/tilelang" ]]\n'
+        '[[ -d "$TILELANG_CACHE_DIR" ]]\n'
         'printf ready > "$CACHE_OBSERVED"\n'
         "printf '%064d\\n' 0\n"
     )

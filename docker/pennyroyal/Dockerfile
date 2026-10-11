@@ -122,6 +122,10 @@ COPY --from=build /opt/pennyroyal-container-packages.txt /opt/pennyroyal-contain
 RUN install -m 0755 /opt/pennyroyal/docker/pennyroyal/entrypoint.sh /usr/local/bin/pennyroyal \
     && mkdir -p /cache /nixl \
     && chown penny:penny /cache /nixl
+# No TILELANG_CACHE_DIR here on purpose (#65): the entry point and the startup
+# scripts derive it under CACHE_BASE (default /cache), and a baked nonempty value
+# would outrank an operator's own identical path. An arbitrary --user gets
+# HOME=/, so nothing on the import path may depend on ~.
 ENV CACHE_BASE=/cache NIXL_STORAGE_BASE=/nixl \
     HF_HOME=/cache/huggingface XDG_CACHE_HOME=/cache \
     SGLANG_MM_PREPROCESS_DEVICE=cpu \
