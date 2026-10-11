@@ -14,7 +14,10 @@ hardware. Penny Royal is an SGLang-derived runtime tuned for **NVIDIA RTX PRO
 **524K context · FR-Spec + adaptive MTP · Persistent conversation cache**
 
 [Get started](#build-and-launch) · [Performance](#performance) ·
-[3.0 release notes](RELEASE_NOTES_3.0.md) · [Community results](COMMUNITY-RESULTS.md)
+[3.0.1 release notes](RELEASE_NOTES_3.0.1.md) · [Community results](COMMUNITY-RESULTS.md)
+
+**3.0.1 maintenance update:** fixes WSL2 RAM PLE, persistent container kernel
+caching and NVMe PLE startup, and prints the release version in startup logs.
 
 ## What's new in 3.0
 
@@ -241,7 +244,7 @@ together, with plenty of back and forth over what was actually worth keeping.
 | Understand the FP8 and SSD options | [Online FP8](FP8.md) · [NVMe PLE](NVME-PLE.md) |
 | See measurements | [Results and history](RESULTS.md) · [Community reports](COMMUNITY-RESULTS.md) |
 | Read the implementation details | [Backends](BACKENDS.md) · [Memory and persistence](MEMORY-AND-PERSISTENCE.md) |
-| Check changes and source lineage | [3.0 notes](RELEASE_NOTES_3.0.md) · [Machine-readable notes](release-3.0.json) · [History](CHANGES.md) · [Provenance](PROVENANCE.md) |
+| Check changes and source lineage | [3.0.1 notes](RELEASE_NOTES_3.0.1.md) · [Machine-readable notes](release-3.0.1.json) · [History](CHANGES.md) · [Provenance](PROVENANCE.md) |
 | Check known issues | [Limitations](LIMITATIONS.md) |
 | Use an AI assistant for setup | [llms.txt](llms.txt) |
 
@@ -281,7 +284,7 @@ components retain their own licenses.
 <a id="scope-and-limitations"></a>
 <a id="documentation-map"></a>
 
-[Current release notes](RELEASE_NOTES_3.0.md) · [Benchmark history](RESULTS.md) ·
+[Current release notes](RELEASE_NOTES_3.0.1.md) · [Benchmark history](RESULTS.md) ·
 [Configuration reference](BACKENDS.md) · [Known issues](LIMITATIONS.md)
 
 <!-- Compatibility anchors for earlier versions of this guide. -->

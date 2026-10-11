@@ -1,6 +1,13 @@
 # Penny Royal release history
 
-## 3.0 — Adaptive decoding and simpler setup (draft)
+## 3.0.1 — PLE startup and container cache fixes (draft)
+
+Fix WSL2 RAM PLE device pointers, keep TileLang kernels in the persistent cache
+for custom container UIDs, and refresh the NVMe PLE reader's source guard.
+Startup logs now identify the Penny Royal release and source commit.
+See the [3.0.1 release notes](RELEASE_NOTES_3.0.1.md).
+
+## 3.0 — Adaptive decoding and simpler setup
 
 - Adaptive NEXTN MTP, automatic rowwise-FP8 dense kernels, faster draft steps
   and lower attention-memory overhead for Flash-Next on RTX PRO 6000.

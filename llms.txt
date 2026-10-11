@@ -6,10 +6,12 @@ Canonical repository: https://github.com/jpezzulli/sglang-rtxpro6000
 Display name: Penny Royal. CLI, API model name, paths and package identifiers
 keep the existing `pennyroyal` spelling.
 
-Penny Royal 3.0 was released October 10, 2026 as `pennyroyal-v3.0.0`.
-Read release-3.0.json for implementation details, measured configuration and
-validation. The container workflow builds `ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.0`
-from that tag; check its build status before pulling a newly published release.
+Penny Royal 3.0.1 fixes WSL2 RAM PLE device pointers, persistent TileLang kernel
+caching for custom container UIDs, and NVMe PLE source compatibility. Startup
+logs now identify the Penny Royal version and source commit. Its source tag is
+`pennyroyal-v3.0.1` and image is `ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.1`.
+Read release-3.0.1.json for publication and validation status. The 3.0 feature
+details and measured performance remain in release-3.0.json and RESULTS.md.
 
 ## Hardware and profiles
 
@@ -65,7 +67,9 @@ are aggregate, not per-request rates. Use normal non-greedy sampling and record
 the actual reasoning settings. A synthetic agent transcript is not a real
 tool workflow.
 
-- [3.0 release notes](https://raw.githubusercontent.com/jpezzulli/sglang-rtxpro6000/pennyroyal-main-sm120-final/RELEASE_NOTES_3.0.md): Human-readable changes and direct contributor acknowledgements.
+- [3.0.1 release notes](https://raw.githubusercontent.com/jpezzulli/sglang-rtxpro6000/pennyroyal-main-sm120-final/RELEASE_NOTES_3.0.1.md): Startup fixes and contributor acknowledgements.
+- [3.0.1 machine-readable release notes](https://raw.githubusercontent.com/jpezzulli/sglang-rtxpro6000/pennyroyal-main-sm120-final/release-3.0.1.json): Fixes, reused qualification and container status.
+- [3.0 release notes](https://raw.githubusercontent.com/jpezzulli/sglang-rtxpro6000/pennyroyal-main-sm120-final/RELEASE_NOTES_3.0.md): Features, performance and direct contributor acknowledgements.
 - [3.0 machine-readable release notes](https://raw.githubusercontent.com/jpezzulli/sglang-rtxpro6000/pennyroyal-main-sm120-final/release-3.0.json): Features, source identity, measurements, validation scope and container build status.
 - [Results](https://raw.githubusercontent.com/jpezzulli/sglang-rtxpro6000/pennyroyal-main-sm120-final/RESULTS.md): Measurement rules, current results and dated benchmark history.
 - [Community results](https://raw.githubusercontent.com/jpezzulli/sglang-rtxpro6000/pennyroyal-main-sm120-final/COMMUNITY-RESULTS.md): Reports from other users, including TP2.
