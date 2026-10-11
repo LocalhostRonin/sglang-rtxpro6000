@@ -24,7 +24,7 @@ import penny_config as pc  # noqa: E402
 # The qualified approved policy; the shipped file and every recipe checksum
 # check must carry exactly this identity.
 ADAPTIVE_NEXT_SHA256 = "64070286310a0d3eeeb3ff3ae074d1ca0fed2937d2274a0adfcb8ace84bc01ee"
-RELEASED_IMAGE = "ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.0"
+RELEASED_IMAGE = "ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.1"
 TOKEN_MAP_SHA256 = "becfa41d394b86c26c632bea8f3c6ea64bbb76d7b238d8673c06afae21269f25"
 
 NEXT_LAUNCHERS = (
@@ -115,7 +115,8 @@ class ContainerDefaultsTest(unittest.TestCase):
         ):
             with self.subTest(path=str(path)):
                 text = self.text(path)
-                self.assertIn("ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.0", text)
+                # One literal on purpose: the entry points must not drift apart.
+                self.assertIn(RELEASED_IMAGE, text)
                 self.assertNotIn("v2.5.3", text)
 
     def test_generated_run_sh_carries_the_default_image(self):
