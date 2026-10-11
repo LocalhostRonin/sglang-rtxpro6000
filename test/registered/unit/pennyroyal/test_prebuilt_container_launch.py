@@ -629,7 +629,7 @@ def test_mounted_startup_reaches_the_server_unchanged(tmp_path):
         ("--hicache-size", "32"),
         ("--hicache-storage-backend", "nixl"),
         ("--speculative-algorithm", "NEXTN"),
-        ("--speculative-num-draft-tokens", "4"),
+        ("--speculative-num-draft-tokens", "8"),
     ):
         assert argv_after(argv, flag) == value, flag
     assert "--ple-offload-embedding" in argv  # RAM PLE stays on
