@@ -46,10 +46,8 @@ Qwen's hybrid models need their recurrent state restored alongside the
 attention cache. Penny handles that complete state, including Flash-Next's
 additional PLE and QSA state, so restored conversations can continue correctly.
 
-In the recorded **v2.5.0 490K restart test**, Penny restored **489,984 cached
-tokens and two Mamba states**, processed only a **five-token suffix**, and
-retrieved all three test facts correctly. See the
-[restart results](MEMORY-AND-PERSISTENCE.md#restart-evidence).
+Penny restored a **490K-token conversation** from cache and processed just
+**five new tokens**, skipping almost half a million tokens of repeated prefill.
 
 Both model profiles use this hierarchy. **NIXL disk caching is on by default**;
 you can disable it while keeping GPU and RAM caching. The
