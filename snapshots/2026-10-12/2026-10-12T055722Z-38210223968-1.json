@@ -1,0 +1,298 @@
+{
+  "api_version": "2022-11-28",
+  "authentication": "TRAFFIC_READ_TOKEN (operator-authorized credential); GITHUB_TOKEN (Contents: write)",
+  "collected_at": "2026-10-12T05:57:22Z",
+  "coverage": {
+    "complete_through_latest_exposed": true,
+    "first_date": "2026-08-24",
+    "missing_dates_through_latest_exposed": [],
+    "not_yet_exposed_dates": [
+      "2026-10-11",
+      "2026-10-12"
+    ],
+    "through_date": "2026-10-10"
+  },
+  "endpoints": {
+    "clones": "clones?per=day",
+    "paths": "popular/paths?per=day",
+    "referrers": "popular/referrers?per=day",
+    "views": "views?per=day"
+  },
+  "launch_date": "2026-08-24",
+  "repository": "jpezzulli/sglang-rtxpro6000",
+  "repository_metrics": {
+    "forks": 19,
+    "stars": 151
+  },
+  "run_attempt": "1",
+  "run_id": "38210223968",
+  "schema_version": 1,
+  "traffic": {
+    "clones": {
+      "clones": [
+        {
+          "count": 98,
+          "timestamp": "2026-09-27T00:00:00Z",
+          "uniques": 49
+        },
+        {
+          "count": 176,
+          "timestamp": "2026-09-28T00:00:00Z",
+          "uniques": 69
+        },
+        {
+          "count": 2623,
+          "timestamp": "2026-09-29T00:00:00Z",
+          "uniques": 58
+        },
+        {
+          "count": 921,
+          "timestamp": "2026-09-30T00:00:00Z",
+          "uniques": 38
+        },
+        {
+          "count": 962,
+          "timestamp": "2026-10-01T00:00:00Z",
+          "uniques": 82
+        },
+        {
+          "count": 1356,
+          "timestamp": "2026-10-02T00:00:00Z",
+          "uniques": 61
+        },
+        {
+          "count": 1294,
+          "timestamp": "2026-10-03T00:00:00Z",
+          "uniques": 74
+        },
+        {
+          "count": 7729,
+          "timestamp": "2026-10-04T00:00:00Z",
+          "uniques": 55
+        },
+        {
+          "count": 983,
+          "timestamp": "2026-10-05T00:00:00Z",
+          "uniques": 71
+        },
+        {
+          "count": 2249,
+          "timestamp": "2026-10-06T00:00:00Z",
+          "uniques": 139
+        },
+        {
+          "count": 21873,
+          "timestamp": "2026-10-07T00:00:00Z",
+          "uniques": 115
+        },
+        {
+          "count": 23010,
+          "timestamp": "2026-10-08T00:00:00Z",
+          "uniques": 100
+        },
+        {
+          "count": 10363,
+          "timestamp": "2026-10-09T00:00:00Z",
+          "uniques": 62
+        },
+        {
+          "count": 8999,
+          "timestamp": "2026-10-10T00:00:00Z",
+          "uniques": 155
+        }
+      ],
+      "count": 82636,
+      "uniques": 951
+    },
+    "paths": [
+      {
+        "count": 1108,
+        "path": "/jpezzulli/sglang-rtxpro6000",
+        "title": "Overview",
+        "uniques": 591
+      },
+      {
+        "count": 184,
+        "path": "/jpezzulli/sglang-rtxpro6000/issues",
+        "title": "/issues",
+        "uniques": 102
+      },
+      {
+        "count": 178,
+        "path": "/jpezzulli/sglang-rtxpro6000/releases",
+        "title": "/releases",
+        "uniques": 93
+      },
+      {
+        "count": 147,
+        "path": "/jpezzulli/sglang-rtxpro6000/pulls",
+        "title": "/pulls",
+        "uniques": 72
+      },
+      {
+        "count": 117,
+        "path": "/jpezzulli/sglang-rtxpro6000/tree/pennyroyal-main-sm120-final",
+        "title": "/tree/pennyroyal-main-sm120-final",
+        "uniques": 78
+      },
+      {
+        "count": 106,
+        "path": "/jpezzulli/sglang-rtxpro6000/blob/pennyroyal-main-sm120-final/docker/pennyroyal/README.md",
+        "title": "/blob/pennyroyal-main-sm120-final/docker/pennyroyal/README.md",
+        "uniques": 60
+      },
+      {
+        "count": 82,
+        "path": "/jpezzulli/sglang-rtxpro6000/blob/pennyroyal-main-sm120-final/RUN.md",
+        "title": "/blob/pennyroyal-main-sm120-final/RUN.md",
+        "uniques": 61
+      },
+      {
+        "count": 82,
+        "path": "/jpezzulli/sglang-rtxpro6000/releases/tag/pennyroyal-v2.5.3",
+        "title": "/releases/tag/pennyroyal-v2.5.3",
+        "uniques": 50
+      },
+      {
+        "count": 65,
+        "path": "/jpezzulli/sglang-rtxpro6000/blob/pennyroyal-main-sm120-final/RESULTS.md",
+        "title": "/blob/pennyroyal-main-sm120-final/RESULTS.md",
+        "uniques": 52
+      },
+      {
+        "count": 48,
+        "path": "/jpezzulli/sglang-rtxpro6000/blob/pennyroyal-main-sm120-final/BUILD.md",
+        "title": "/blob/pennyroyal-main-sm120-final/BUILD.md",
+        "uniques": 29
+      }
+    ],
+    "referrers": [
+      {
+        "count": 151,
+        "referrer": "github.com",
+        "uniques": 100
+      },
+      {
+        "count": 148,
+        "referrer": "reddit.com",
+        "uniques": 114
+      },
+      {
+        "count": 75,
+        "referrer": "Google",
+        "uniques": 60
+      },
+      {
+        "count": 57,
+        "referrer": "forums.developer.nvidia.com",
+        "uniques": 45
+      },
+      {
+        "count": 44,
+        "referrer": "huggingface.co",
+        "uniques": 34
+      },
+      {
+        "count": 41,
+        "referrer": "com.reddit.frontpage",
+        "uniques": 30
+      },
+      {
+        "count": 11,
+        "referrer": "search.brave.com",
+        "uniques": 8
+      },
+      {
+        "count": 11,
+        "referrer": "teams.public.onecdn.static.microsoft",
+        "uniques": 6
+      },
+      {
+        "count": 10,
+        "referrer": "github.laiyagushi.com",
+        "uniques": 1
+      },
+      {
+        "count": 8,
+        "referrer": "chatgpt.com",
+        "uniques": 6
+      }
+    ],
+    "views": {
+      "count": 3374,
+      "uniques": 828,
+      "views": [
+        {
+          "count": 59,
+          "timestamp": "2026-09-27T00:00:00Z",
+          "uniques": 33
+        },
+        {
+          "count": 229,
+          "timestamp": "2026-09-28T00:00:00Z",
+          "uniques": 78
+        },
+        {
+          "count": 316,
+          "timestamp": "2026-09-29T00:00:00Z",
+          "uniques": 97
+        },
+        {
+          "count": 239,
+          "timestamp": "2026-09-30T00:00:00Z",
+          "uniques": 87
+        },
+        {
+          "count": 159,
+          "timestamp": "2026-10-01T00:00:00Z",
+          "uniques": 79
+        },
+        {
+          "count": 186,
+          "timestamp": "2026-10-02T00:00:00Z",
+          "uniques": 91
+        },
+        {
+          "count": 170,
+          "timestamp": "2026-10-03T00:00:00Z",
+          "uniques": 79
+        },
+        {
+          "count": 194,
+          "timestamp": "2026-10-04T00:00:00Z",
+          "uniques": 76
+        },
+        {
+          "count": 315,
+          "timestamp": "2026-10-05T00:00:00Z",
+          "uniques": 120
+        },
+        {
+          "count": 262,
+          "timestamp": "2026-10-06T00:00:00Z",
+          "uniques": 101
+        },
+        {
+          "count": 240,
+          "timestamp": "2026-10-07T00:00:00Z",
+          "uniques": 81
+        },
+        {
+          "count": 233,
+          "timestamp": "2026-10-08T00:00:00Z",
+          "uniques": 90
+        },
+        {
+          "count": 298,
+          "timestamp": "2026-10-09T00:00:00Z",
+          "uniques": 109
+        },
+        {
+          "count": 474,
+          "timestamp": "2026-10-10T00:00:00Z",
+          "uniques": 120
+        }
+      ]
+    }
+  }
+}
