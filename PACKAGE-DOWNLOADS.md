@@ -2,17 +2,17 @@
 
 Package: [`ghcr.io/jpezzulli/sglang-rtxpro6000`](https://github.com/users/jpezzulli/packages/container/package/sglang-rtxpro6000).
 Published: **2026-09-15**. First captured: **2026-09-16T12:21:06Z**.
-Latest capture: **2026-10-12T05:57:26Z**.
+Latest capture: **2026-10-13T06:46:51Z**.
 
 | Metric | Latest reported | Change from previous archived day |
 | --- | ---: | ---: |
-| Package total downloads | 6,980 | +717 |
-| Version `build-b976bb329cfc1376b7d4589d55871f586d460ad4`, `v2.5.0` | 547 | +127 |
-| Version `build-2d6689abdac6f200091e9aa1ae65e95b86d9dd82`, `v2.5.1` | 781 | +2 |
-| Version `build-5cd0818abf27cc524ee15b1fedb23070855d9ea6`, `v2.5.2` | 734 | +129 |
-| Version `build-d00d88efc8d6281b12be4f4073126aec95038c55`, `v2.5.3` | 1,310 | +11 |
-| Version `build-5d33142c1f3fd3df1548b9682f728fcdd8c7a710`, `v3.0.0` | 253 | +182 |
-| Version `build-6ade93c1a4c52b595ada318466bc41ae190b2709`, `build-cache`, `v3.0.1` | 79 | — |
+| Package total downloads | 9,149 | +2,169 |
+| Version `build-b976bb329cfc1376b7d4589d55871f586d460ad4`, `v2.5.0` | 863 | +316 |
+| Version `build-2d6689abdac6f200091e9aa1ae65e95b86d9dd82`, `v2.5.1` | 1,001 | +220 |
+| Version `build-5cd0818abf27cc524ee15b1fedb23070855d9ea6`, `v2.5.2` | 1,050 | +316 |
+| Version `build-d00d88efc8d6281b12be4f4073126aec95038c55`, `v2.5.3` | 1,531 | +221 |
+| Version `build-5d33142c1f3fd3df1548b9682f728fcdd8c7a710`, `v3.0.0` | 573 | +320 |
+| Version `build-6ade93c1a4c52b595ada318466bc41ae190b2709`, `build-cache`, `v3.0.1` | 593 | +514 |
 
 These are GitHub package download counters, not unique users, successful installations, or repository clones. Container clients may fetch an index, platform manifests, and layers; builds and tests can also contribute downloads.
 
@@ -47,5 +47,6 @@ These are GitHub package download counters, not unique users, successful install
 | 2026-10-10 | 2026-10-10T05:52:14Z | 5,967 | +176 |
 | 2026-10-11 | 2026-10-11T05:46:08Z | 6,263 | +296 |
 | 2026-10-12 | 2026-10-12T05:57:26Z | 6,980 | +717 |
+| 2026-10-13 | 2026-10-13T06:46:51Z | 9,149 | +2,169 |
 
 GitHub exposes these counters on the public package pages. Its documented Packages REST responses provide package/version metadata but do not include download counters, so this collector validates and archives the public HTML representation. A markup change fails the package step loudly; the preceding repository-traffic step remains safely committed.
