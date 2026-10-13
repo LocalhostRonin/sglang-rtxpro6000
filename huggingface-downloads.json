@@ -1,6 +1,6 @@
 {
   "api_url": "https://huggingface.co/api/models/jpezzulli/OrcaRouter-Qwen3.8-Flash-Next-Uncensored-ModelOpt-NVFP4?expand%5B%5D=createdAt&expand%5B%5D=lastModified&expand%5B%5D=downloads&expand%5B%5D=downloadsAllTime&expand%5B%5D=likes",
-  "collected_at": "2026-10-12T05:57:36Z",
+  "collected_at": "2026-10-13T06:47:07Z",
   "created_at": "2026-09-17T03:42:44.000Z",
   "days": {
     "2026-10-06": {
@@ -51,6 +51,13 @@
       "downloads_last_30_days": 2074,
       "likes": 17,
       "source_sha256": "1a1d5c25081cb75d2707ed204622d1811889297b2cbf909c1fed4739ea7c4ee2"
+    },
+    "2026-10-13": {
+      "collected_at": "2026-10-13T06:47:07Z",
+      "downloads_all_time": 2167,
+      "downloads_last_30_days": 2167,
+      "likes": 17,
+      "source_sha256": "86481ad8c8ac26e6fc92ee0a7b9a7bddbd7440be3378d5027f560ccfef50c429"
     }
   },
   "first_collected_at": "2026-10-06T00:29:45Z",
