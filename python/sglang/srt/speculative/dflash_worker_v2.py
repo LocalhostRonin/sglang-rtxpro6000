@@ -796,6 +796,16 @@ class DFlashWorkerV2(BaseSpecWorker):
         over-estimated host len (the reserved overlap bound) could UNDER-shoot
         the true device value. min(len, window+page) is its monotonic envelope
         (always >= the exact compact len); consumers only need an upper bound.
+
+        The value filled here bounds the DEVICE kv length, which for the draft is
+        (compact prefix + verify block): _rebuild_compact_draft_cache writes the
+        window at [0, draft_prefix_len) and the block right after it, so a bound
+        that stops at the prefix makes backends plan a page table that is one
+        block short of the rows the draft actually attends. This mirrors the
+        non-compact path in forward_batch_generation, which copies the host lens
+        and then adds block_size. The block is added AFTER the clamp: clamping to
+        (window + page + block) would still come out block_size short whenever
+        the prefix is cropped below the clamp.
         """
         assert self.draft_window_size is not None
         bound = int(self.draft_window_size) + (
@@ -803,6 +813,7 @@ class DFlashWorkerV2(BaseSpecWorker):
         )
         lens = host_seq_lens.to(dtype=torch.int64, device="cpu")
         out.copy_(torch.clamp(lens, max=bound).to(torch.int32))
+        out.add_(int(self.block_size))
 
     def _fill_compact_seq_lens_cpu_bound(
         self,
@@ -820,8 +831,10 @@ class DFlashWorkerV2(BaseSpecWorker):
         elif nxt_kv_lens_cpu is not None:
             self._compute_compact_draft_seq_lens_host(nxt_kv_lens_cpu, out=out)
         else:
-            # Last resort: the legacy blocking D2H copy.
+            # Last resort: the legacy blocking D2H copy. draft_prefix_lens is the
+            # compact prefix only, so the verify block is added here too.
             out.copy_(draft_prefix_lens)
+            out.add_(int(self.block_size))
 
     def _rebuild_compact_draft_cache(
         self,

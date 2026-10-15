@@ -26,8 +26,12 @@ def _compact_lens_exact(seq_lens, window, page):
     return DFlashWorkerV2._compute_compact_draft_seq_lens(fake_self, seq_lens)
 
 
-def _compact_lens_host(seq_lens, window, page):
-    fake_self = SimpleNamespace(draft_window_size=window, page_size=page)
+def _compact_lens_host(seq_lens, window, page, block_size=8):
+    # The host bound covers the device kv length, i.e. the exact compact prefix
+    # plus the verify block, so the fake self needs the block size too.
+    fake_self = SimpleNamespace(
+        draft_window_size=window, page_size=page, block_size=block_size
+    )
     out = torch.empty(seq_lens.numel(), dtype=torch.int32)
     from sglang.srt.speculative.dflash_worker_v2 import DFlashWorkerV2
 
@@ -43,8 +47,8 @@ class TestCompactSeqLensHostBound(CustomTestCase):
             exact = _compact_lens_exact(seq, window, page).to(torch.int64)
             bound = _compact_lens_host(seq, window, page).to(torch.int64)
             self.assertTrue(
-                bool((bound >= exact).all()),
-                f"host bound under-shoots exact at window={window} page={page}",
+                bool((bound >= exact + 8).all()),
+                f"host bound under-shoots exact+block at window={window} page={page}",
             )
 
     def test_sawtooth_counterexample(self):
@@ -58,7 +62,7 @@ class TestCompactSeqLensHostBound(CustomTestCase):
         exact_reserved = _compact_lens_exact(reserved, window, page).to(torch.int64)
         self.assertLess(int(exact_reserved), int(exact_true))
         bound = _compact_lens_host(reserved, window, page).to(torch.int64)
-        self.assertGreaterEqual(int(bound), int(exact_true))
+        self.assertGreaterEqual(int(bound), int(exact_true) + 8)
 
 
 class _FakeTpGroup:
