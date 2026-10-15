@@ -233,6 +233,16 @@ def apply_dflash_verify_logits_adjustments(
             f"Expected {bs * draft_token_num}, got {next_token_logits.shape[0]}."
         )
 
+    # The request-level mask is the previous extend/decode step's, one row per
+    # request, and it is stale here for two reasons: batch filtering can shrink
+    # the batch under the mask's row count (shape mismatch), and the verify tree
+    # has its own grammar state per position, which the verify callers apply
+    # separately (see build_grammar_vocab_mask). Broadcasting it over the block
+    # would mask a position from its predecessor's state, and an all-masked
+    # leftover row would make every verify logit -inf. Clear it before anything
+    # reads it; the per-position mask is the caller's to own.
+    sampling_info.grammar_mask = None
+
     if sampling_info.has_custom_logit_processor:
         apply_custom_logit_processor(
             next_token_logits,
@@ -242,7 +252,6 @@ def apply_dflash_verify_logits_adjustments(
 
     acc_additive_penalties = getattr(sampling_info, "acc_additive_penalties", None)
     penalizer = getattr(sampling_info, "penalizer_orchestrator", None)
-    grammar_mask = getattr(sampling_info, "grammar_mask", None)
     logit_bias = getattr(sampling_info, "logit_bias", None)
 
     logits_3d: Optional[torch.Tensor] = None
@@ -253,14 +262,17 @@ def apply_dflash_verify_logits_adjustments(
             logits_3d = next_token_logits.reshape(bs, draft_token_num, -1)
         return logits_3d
 
-    # Dense fallback only when we need live penalizer application or a vocab mask.
+    # Dense fallback only when we need live penalizer application: the
+    # broadcast path would skip the penalizer's own vocab-wide write. A stale
+    # request-level grammar mask is no longer a reason to take it -- it is
+    # cleared above, and the live per-position mask is applied by the caller.
     # In overlap scheduling the common path is `acc_additive_penalties`, which can
     # be broadcast over the verify block without materializing a repeated buffer.
     if (
         penalizer is not None
         and penalizer.is_required
         and acc_additive_penalties is None
-    ) or grammar_mask is not None:
+    ):
         additive_adjustment = torch.zeros(
             (bs, next_token_logits.shape[1]),
             dtype=torch.float32,
