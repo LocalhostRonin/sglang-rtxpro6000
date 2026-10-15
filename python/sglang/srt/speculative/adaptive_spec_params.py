@@ -168,8 +168,9 @@ class AdaptiveStepSlot:
     - Only updates every `update_interval` batches for stability
     - After a switch, holds the new width for `switch_grace_batches` completed
       feedback batches, doubling the hold on a direction reversal up to
-      `max_grace_batches`, so two near-tied candidates cannot ping-pong. The EMA
-      keeps updating during the hold; 0 (the default) keeps the old policy.
+      `max_grace_batches`, so candidates the acceptance EMA cannot separate
+      cannot ping-pong. The EMA keeps updating during the hold; 0 (the default)
+      keeps the old policy.
     - num_steps can be selected from different candidate sets on different batch_sizes
     """
 
@@ -185,21 +186,19 @@ class AdaptiveStepSlot:
         self.up_hysteresis = cfg.get("up_hysteresis", 0.0)
         self.ceiling_coeff = cfg.get("ceiling_coeff", 0)
 
-        # Anti-oscillation hold, ported from the donor controller: see
-        # https://github.com/aiueo52/sglang-rtxpro6000 snapshot 5105985,
-        # python/sglang/srt/speculative/adaptive_confidence.py (grace setup
-        # 373-385, completed-feedback gate 512-518, switch bookkeeping 624-632).
-        # A switch leaves the draft state cold for a batch or two, so the slot
-        # re-decides only after `switch_grace_batches` COMPLETED feedback
-        # batches, and every REVERSAL of the previous switch's direction
-        # multiplies that hold by `grace_backoff` up to `max_grace_batches`.
-        # A genuine tie therefore converges on holding one width -- which costs
-        # almost nothing, precisely because it is a tie -- while a sustained
-        # change in acceptance still gets through on the first decision after
-        # the hold. The EMA keeps updating throughout, so the hold delays
-        # decisions and never stops the slot learning. 0 disables both, which
-        # is the default: a config omitting these keys switches exactly when it
-        # used to.
+        # Anti-oscillation hold, ported from the donor controller's switch grace
+        # and reversal backoff (https://github.com/aiueo52/sglang-rtxpro6000
+        # snapshot 5105985, adaptive_confidence.py: grace setup 373-385,
+        # completed-feedback gate 512-518, switch bookkeeping 624-632). After a
+        # switch this slot re-decides only once `switch_grace_batches` COMPLETED
+        # feedback batches have passed, and a REVERSAL of the previous switch's
+        # direction multiplies that hold by `grace_backoff` up to
+        # `max_grace_batches`, so two candidates the acceptance EMA cannot
+        # separate stop trading places batch after batch. The gate sits after
+        # the EMA update, so the slot keeps learning through the hold and a
+        # sustained change is selected on the first decision the hold allows.
+        # 0 disables it, and is the default: a config that omits these keys
+        # switches exactly when it used to.
         self.switch_grace_batches = _non_negative_int(cfg, "switch_grace_batches", 0)
         self.grace_backoff = _backoff_multiplier(cfg, "grace_backoff", 2.0)
         self.max_grace_batches = _non_negative_int(cfg, "max_grace_batches", 80)

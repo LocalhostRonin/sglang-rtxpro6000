@@ -335,17 +335,24 @@ class TestSwitchGraceHold(unittest.TestCase):
         self.assertFalse(slot.update([3]))  # batch 2: still inside the hold
         self.assertEqual(slot.current_steps, 3)
 
-    def test_the_first_hold_is_the_configured_one_and_only_reversals_extend_it(self):
+    def test_same_direction_switches_keep_the_initial_hold(self):
+        # Three candidates, so the controller really can step 1 -> 3 -> 7: two
+        # SAME-direction switches in a row, then reversals. Both up-switches land
+        # on consecutive batches, which only the reset-to-initial-hold branch
+        # allows, and only the direction changes grow the hold -- up to its cap.
         slot = self._slot(
-            7, switch_grace_batches=1, grace_backoff=2.0, max_grace_batches=2
+            1,
+            candidate_steps=[1, 3, 7],
+            switch_grace_batches=1,
+            grace_backoff=2.0,
+            max_grace_batches=3,
         )
+        stream = [[2], [6], [1], [3], [3], [0], [0], [0]]
 
-        # Two same-direction switches in a row keep the initial 1-batch hold;
-        # only a reversal doubles it, and the doubling stops at the cap.
         self.assertEqual(
-            self._run(slot, self._alternating(5)), [(1, 3), (2, 7), (5, 3)]
+            self._run(slot, stream), [(1, 3), (2, 7), (3, 3), (5, 7), (8, 1)]
         )
-        self.assertEqual(slot._grace, 2.0)
+        self.assertEqual(slot._grace, 3.0, "the reversal hold stops at the cap")
 
     def test_invalid_hold_settings_are_rejected(self):
         invalid = (

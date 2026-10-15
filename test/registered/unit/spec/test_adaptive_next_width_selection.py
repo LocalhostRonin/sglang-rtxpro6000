@@ -301,8 +301,9 @@ class TestC1WidthHold(_ConfigCase):
 
     The native runtime switched width 47 times in 72 s of acceptance-only
     feedback and 1081 times over a 130-turn presentation: the controller
-    re-decides every batch, so two near-tied candidates trade places forever.
-    These walk the deterministic stream through the real path and pin the bound.
+    re-decides every batch, so candidates the EMA cannot separate trade places
+    forever. These walk the deterministic stream through the real path and pin
+    the bound.
     """
 
     @staticmethod
