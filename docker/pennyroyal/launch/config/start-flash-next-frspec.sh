@@ -216,7 +216,7 @@ read -r TOKENIZER_SHA _ < <(sha256sum "$TARGET_MODEL/tokenizer.json")
   echo "Target tokenizer differs from the qualified FR-Spec tokenizer" >&2; exit 1;
 }
 read -r ADAPTIVE_SHA _ < <(sha256sum "$ADAPTIVE_CONFIG")
-[[ "$ADAPTIVE_SHA" == 64070286310a0d3eeeb3ff3ae074d1ca0fed2937d2274a0adfcb8ace84bc01ee ]] || {
+[[ "$ADAPTIVE_SHA" == 658158c29d2de8d2ee9c58ea8e7ac68a2dc70dd1ac1c46642e0a4302b798728f ]] || {
   echo "Adaptive MTP policy does not match the approved checksum" >&2; exit 1;
 }
 SGLANG_REV="$(git -C "$REPO_ROOT" rev-parse --short=10 HEAD)"

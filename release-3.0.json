@@ -97,7 +97,7 @@
       "draft_tokens": 8,
       "label": "Integrated 3.0 default; launch captures the maximum width, with C1 W4/W8 and C2+ W4",
       "fr_spec_enabled": true,
-      "policy_sha256": "64070286310a0d3eeeb3ff3ae074d1ca0fed2937d2274a0adfcb8ace84bc01ee"
+      "policy_sha256": "658158c29d2de8d2ee9c58ea8e7ac68a2dc70dd1ac1c46642e0a4302b798728f"
     },
     "propagation_required_before_publication": false,
     "configurator_exposes_adaptive": false,

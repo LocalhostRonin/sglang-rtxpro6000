@@ -23,7 +23,7 @@ import penny_config as pc  # noqa: E402
 
 # The qualified approved policy; the shipped file and every recipe checksum
 # check must carry exactly this identity.
-ADAPTIVE_NEXT_SHA256 = "64070286310a0d3eeeb3ff3ae074d1ca0fed2937d2274a0adfcb8ace84bc01ee"
+ADAPTIVE_NEXT_SHA256 = "658158c29d2de8d2ee9c58ea8e7ac68a2dc70dd1ac1c46642e0a4302b798728f"
 RELEASED_IMAGE = "ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.1"
 TOKEN_MAP_SHA256 = "becfa41d394b86c26c632bea8f3c6ea64bbb76d7b238d8673c06afae21269f25"
 

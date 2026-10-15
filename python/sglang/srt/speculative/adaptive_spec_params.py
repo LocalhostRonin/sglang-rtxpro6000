@@ -126,6 +126,25 @@ def _load_adaptive_config(
     return cfg, bs_entries
 
 
+def _non_negative_int(cfg: dict, key: str, default: int) -> int:
+    value = cfg.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{key} must be a non-negative int, got {value!r}")
+    return value
+
+
+def _backoff_multiplier(cfg: dict, key: str, default: float) -> float:
+    value = cfg.get(key, default)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 1.0
+    ):
+        raise ValueError(f"{key} must be a finite number >= 1.0, got {value!r}")
+    return float(value)
+
+
 def resolve_candidate_steps_from_config(
     cfg_path: str | None = None,
 ) -> list[int]:
@@ -147,6 +166,10 @@ class AdaptiveStepSlot:
     - Probes one step beyond observed acceptance
     - EMA smoothing prevents oscillation
     - Only updates every `update_interval` batches for stability
+    - After a switch, holds the new width for `switch_grace_batches` completed
+      feedback batches, doubling the hold on a direction reversal up to
+      `max_grace_batches`, so two near-tied candidates cannot ping-pong. The EMA
+      keeps updating during the hold; 0 (the default) keeps the old policy.
     - num_steps can be selected from different candidate sets on different batch_sizes
     """
 
@@ -161,6 +184,35 @@ class AdaptiveStepSlot:
         self.down_hysteresis = cfg.get("down_hysteresis", -0.25)
         self.up_hysteresis = cfg.get("up_hysteresis", 0.0)
         self.ceiling_coeff = cfg.get("ceiling_coeff", 0)
+
+        # Anti-oscillation hold, ported from the donor controller: see
+        # https://github.com/aiueo52/sglang-rtxpro6000 snapshot 5105985,
+        # python/sglang/srt/speculative/adaptive_confidence.py (grace setup
+        # 373-385, completed-feedback gate 512-518, switch bookkeeping 624-632).
+        # A switch leaves the draft state cold for a batch or two, so the slot
+        # re-decides only after `switch_grace_batches` COMPLETED feedback
+        # batches, and every REVERSAL of the previous switch's direction
+        # multiplies that hold by `grace_backoff` up to `max_grace_batches`.
+        # A genuine tie therefore converges on holding one width -- which costs
+        # almost nothing, precisely because it is a tie -- while a sustained
+        # change in acceptance still gets through on the first decision after
+        # the hold. The EMA keeps updating throughout, so the hold delays
+        # decisions and never stops the slot learning. 0 disables both, which
+        # is the default: a config omitting these keys switches exactly when it
+        # used to.
+        self.switch_grace_batches = _non_negative_int(cfg, "switch_grace_batches", 0)
+        self.grace_backoff = _backoff_multiplier(cfg, "grace_backoff", 2.0)
+        self.max_grace_batches = _non_negative_int(cfg, "max_grace_batches", 80)
+        if self.switch_grace_batches and self.max_grace_batches < (
+            self.switch_grace_batches
+        ):
+            raise ValueError(
+                f"max_grace_batches ({self.max_grace_batches}) must cover the "
+                f"initial switch_grace_batches ({self.switch_grace_batches})"
+            )
+        self._grace = float(self.switch_grace_batches)
+        self._last_dir = 0
+        self._grace_until = 0
 
         if initial_steps in self.candidate_steps:
             self.current_steps = initial_steps
@@ -190,6 +242,12 @@ class AdaptiveStepSlot:
 
         self._batch_count += 1
         if self._batch_count <= self.warmup_batches:
+            return False
+
+        if self._batch_count < self._grace_until:
+            # Inside a post-switch hold: the EMA above already learned from
+            # this batch, only the re-decision is deferred. Empty feedback
+            # returns before the counter, so the hold is in completed batches.
             return False
 
         if (self._batch_count - self.warmup_batches) % self.update_interval != 0:
@@ -247,8 +305,21 @@ class AdaptiveStepSlot:
 
         return self._apply_target_steps(old_steps, target)
 
+    def _arm_grace(self, direction: int) -> None:
+        """Start the post-switch hold, lengthened on a reversal of the last switch."""
+        if self.switch_grace_batches:
+            if direction == -self._last_dir:
+                self._grace = min(
+                    float(self.max_grace_batches), self._grace * self.grace_backoff
+                )
+            else:
+                self._grace = float(self.switch_grace_batches)
+            self._grace_until = self._batch_count + int(self._grace)
+        self._last_dir = direction
+
     def _apply_target_steps(self, old_steps: int, target: int) -> bool:
         if target != old_steps:
+            self._arm_grace(1 if target > old_steps else -1)
             self.current_steps = target
             log_info_on_rank0(
                 logger,
