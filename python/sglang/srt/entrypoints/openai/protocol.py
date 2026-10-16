@@ -697,6 +697,29 @@ class ChatCompletionMessageGenericParam(BaseModel):
     tool_calls: Optional[List[ToolCall]] = Field(default=None, examples=[None])
     tools: Optional[List[Tool]] = Field(default=None, examples=[None])
 
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_reasoning_alias(cls, data):
+        """Replayed prior thinking may arrive as vLLM's `reasoning`.
+
+        Only an assistant turn can have prior thinking, so the alias is folded in
+        for that role alone (case-insensitively, like the role validator below):
+        a tool or system message that carries its own `reasoning` key stays as it
+        is, instead of acquiring reasoning history it never had. The canonical
+        `reasoning_content` keeps precedence whenever it is present, including an
+        explicit empty string, so only a missing or null canonical field takes
+        the alias.
+        """
+        role = data.get("role") if isinstance(data, dict) else None
+        if (
+            isinstance(role, str)
+            and role.lower() == "assistant"
+            and data.get("reasoning_content") is None
+            and isinstance(data.get("reasoning"), str)
+        ):
+            data = {**data, "reasoning_content": data["reasoning"]}
+        return data
+
     @field_validator("role", mode="before")
     @classmethod
     def _normalize_role(cls, v):

@@ -1155,6 +1155,135 @@ class ServingChatTestCase(unittest.TestCase):
         )
         self.assertNotIn("image_prompts", kwargs)
 
+    def test_assistant_history_accepts_the_reasoning_alias(self):
+        """A replayed assistant turn may carry prior thinking as `reasoning`.
+
+        Some clients replay the assistant turn with vLLM's field name, and the
+        chat template only reads `reasoning_content`, so the alias has to be
+        folded in or the turn loses its thinking block. The canonical field
+        keeps precedence whenever it is present, and an explicit empty string is
+        a real (empty) history rather than a missing one.
+        """
+        self.template_manager.chat_template_name = None
+        self.tm.tokenizer.apply_chat_template.return_value = [1, 2, 3]
+        cases = [
+            ({"role": "assistant", "content": "Hello"}, None),
+            ({"role": "assistant", "content": "Hello", "reasoning": "alias"}, "alias"),
+            (
+                {
+                    "role": "assistant",
+                    "content": "Hello",
+                    "reasoning_content": "native",
+                },
+                "native",
+            ),
+            (
+                {
+                    "role": "assistant",
+                    "content": "Hello",
+                    "reasoning": "alias",
+                    "reasoning_content": "native",
+                },
+                "native",
+            ),
+            (
+                {
+                    "role": "assistant",
+                    "content": "Hello",
+                    "reasoning": "alias",
+                    "reasoning_content": "",
+                },
+                "",
+            ),
+            (
+                {
+                    "role": "assistant",
+                    "content": "Hello",
+                    "reasoning": "alias",
+                    "reasoning_content": None,
+                },
+                "alias",
+            ),
+            ({"role": "assistant", "content": "Hello", "reasoning": 7}, None),
+            (
+                {"role": "Assistant", "content": "Hello", "reasoning": "folded"},
+                "folded",
+            ),
+        ]
+        request = ChatCompletionRequest(
+            model="x",
+            messages=[
+                {"role": "user", "content": "Hi?"},
+                *[case[0] for case in cases],
+                # A replayed history does not end on the assistant turn, and a
+                # trailing one would be reframed by continue_final_message.
+                {"role": "user", "content": "And then?"},
+            ],
+        )
+
+        self.chat._process_messages(request, is_multimodal=False)
+
+        rendered = self.tm.tokenizer.apply_chat_template.call_args.args[0]
+        self.assertEqual(len(rendered), len(cases) + 2)
+        for offset, (sent, want) in enumerate(cases, start=1):
+            with self.subTest(message=sent):
+                self.assertEqual(rendered[offset].get("reasoning_content"), want)
+
+    def test_non_assistant_history_keeps_an_unrelated_reasoning_field(self):
+        """Only a turn that can have prior thinking may take the alias.
+
+        `reasoning` is a free key on every message dict a client may send: a tool
+        result carrying its own `reasoning` note must stay a tool result, and
+        must not serialize a canonical `reasoning_content` it never had.
+        """
+        self.template_manager.chat_template_name = None
+        self.tm.tokenizer.apply_chat_template.return_value = [1, 2, 3]
+        request = ChatCompletionRequest(
+            model="x",
+            messages=[
+                {"role": "user", "content": "Hi?", "reasoning": "not thinking"},
+                {
+                    "role": "tool",
+                    "tool_call_id": "c1",
+                    "content": "ok",
+                    "reasoning": "tool-local note",
+                },
+                {
+                    "role": "system",
+                    "content": "be brief",
+                    "reasoning": "system-local note",
+                },
+                {
+                    "role": "developer",
+                    "content": "be brief",
+                    "reasoning": "developer-local note",
+                },
+                {"role": "tool", "tool_call_id": "c2", "content": "ok", "reasoning": 5},
+                # The assistant turn is the one that takes the alias, and its
+                # role is matched the way the role validator matches it.
+                {"role": "ASSISTANT", "content": "Hello", "reasoning": "alias"},
+                {"role": "user", "content": "And then?"},
+            ],
+        )
+
+        self.chat._process_messages(request, is_multimodal=False)
+
+        rendered = self.tm.tokenizer.apply_chat_template.call_args.args[0]
+        self.assertEqual(
+            [message["role"] for message in rendered[:5]],
+            [
+                "user",
+                "tool",
+                "system",
+                "developer",
+                "tool",
+            ],
+        )
+        for message in rendered[:5]:
+            with self.subTest(role=message["role"]):
+                self.assertNotIn("reasoning_content", message)
+        self.assertEqual(rendered[5]["reasoning_content"], "alias")
+
     def test_message_tools_participate_in_validation_across_encodings(self):
         tool = {
             "type": "function",
