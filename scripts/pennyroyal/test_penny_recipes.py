@@ -24,7 +24,7 @@ import penny_config as pc  # noqa: E402
 # The qualified approved policy; the shipped file and every recipe checksum
 # check must carry exactly this identity.
 ADAPTIVE_NEXT_SHA256 = "658158c29d2de8d2ee9c58ea8e7ac68a2dc70dd1ac1c46642e0a4302b798728f"
-RELEASED_IMAGE = "ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.1"
+RELEASED_IMAGE = "ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.2"
 TOKEN_MAP_SHA256 = "becfa41d394b86c26c632bea8f3c6ea64bbb76d7b238d8673c06afae21269f25"
 
 NEXT_LAUNCHERS = (
@@ -118,6 +118,13 @@ class ContainerDefaultsTest(unittest.TestCase):
                 # One literal on purpose: the entry points must not drift apart.
                 self.assertIn(RELEASED_IMAGE, text)
                 self.assertNotIn("v2.5.3", text)
+
+    def test_the_release_asset_names_the_same_release(self):
+        # The startup banner reads the version asset and the launch files read
+        # the image default: one release line, or a v3.0.x image boots under a
+        # banner naming something else.
+        version = (ROOT / "configs" / "pennyroyal" / "pennyroyal.version").read_text()
+        self.assertEqual(version.strip(), RELEASED_IMAGE.rsplit(":v", 1)[1])
 
     def test_generated_run_sh_carries_the_default_image(self):
         source = self.text(ROOT / "scripts" / "pennyroyal" / "penny_config.py")

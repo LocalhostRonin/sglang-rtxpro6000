@@ -49,7 +49,7 @@ Use matching source and image tags from the release notes. Download only the
 small launch-file set; a full source checkout is optional.
 
 ```bash
-RELEASE_REF='pennyroyal-v3.0.1'
+RELEASE_REF='pennyroyal-v3.0.2'
 BASE="https://raw.githubusercontent.com/jpezzulli/sglang-rtxpro6000/$RELEASE_REF/docker/pennyroyal/launch"
 mkdir -p pennyroyal/config
 cd pennyroyal
@@ -100,7 +100,7 @@ FR-Spec with fixed four-token drafts.
 Run from your launch-file folder, using the image tag from the release:
 
 ```bash
-IMAGE='ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.1'
+IMAGE='ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.2'
 ./run.sh --image "$IMAGE" --startup config/start-flash-next-frspec.sh
 ```
 
@@ -119,8 +119,14 @@ for a generation request.
 
 Stop with Ctrl-C. Edit your host settings and run the same command to start
 again. Your model files and persistent caches remain in their host folders.
-To upgrade, select the new image tag and review the new release's sample
-startup files before restarting.
+
+To upgrade, review the new release's sample startup files before restarting:
+the startup script belongs to the same release as the image. Where a pin
+overrides the launcher's default, move it with the release: set `IMAGE=` to the
+new tag in a `run.sh` you edited (keep the assignment; the script runs under
+`set -u`) or pass `--image`. A `PENNYROYAL_IMAGE=` line in saved configurator
+settings (see [the setup guide](../../CONFIGURE.md#update-the-setup-files)) or
+in the Compose `.env` can instead be deleted to follow the new default.
 
 ## Optional disk caching
 

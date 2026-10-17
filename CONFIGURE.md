@@ -98,6 +98,12 @@ v2.5.3 `setup1` tag remains an update for v2.5.3; it is not the 3.0 setup.
 Keep the configuration you currently use, generate a new one with the new
 checkout, and use its printed command when you are ready to switch.
 
+A saved container setting that names an image explicitly (`PENNYROYAL_IMAGE=`)
+survives every later save: setup keeps your pin rather than moving you to a
+new release. To follow the new default, delete that line from the file you are
+re-saving, or set it to the new tag; either way the save writes a fresh folder
+and the old launch files stay as they were.
+
 <!-- Compatibility anchors for earlier versions of this guide. -->
 <a id="configure-pennyroyal-with-configure-penny"></a>
 <a id="container-configure-check-then-run-what-setup-printed"></a>

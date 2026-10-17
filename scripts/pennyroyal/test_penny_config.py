@@ -9,6 +9,7 @@ network, or package installs are touched.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import math
 import os
@@ -1979,6 +1980,105 @@ class ContainerLaunchGenerationTests(FixtureMixin):
             self.base / "launch out" / "config" / "start-flash-next-frspec.sh"
         ]
         self.assertIn("\nTP_SIZE=2\n", startup)
+
+    def test_a_plain_save_keeps_each_profiles_own_recipe(self):
+        # With nothing chosen beyond the required paths, a generated startup
+        # file is the shipped recipe with the model paths written out: the
+        # profile keeps its own draft, HiCache size, TP and launch line, so a
+        # re-save cannot quietly move 27B onto the Next recipe or the reverse.
+        for profile, script, wanted in (
+            (
+                "next",
+                "start-flash-next-frspec.sh",
+                (
+                    "TARGET_MODEL=/models/RadixArk-Qwen3.8-Flash-Next-NVFP4\n",
+                    "HICACHE_SIZE_GB=32\n",
+                    "--speculative-token-map",
+                ),
+            ),
+            (
+                "next-plain",
+                "start-flash-next.sh",
+                (
+                    "TARGET_MODEL=/models/RadixArk-Qwen3.8-Flash-Next-NVFP4\n",
+                    "HICACHE_SIZE_GB=32\n",
+                    "--speculative-num-steps 7",
+                ),
+            ),
+            (
+                "27b",
+                "start-27b-dflash2.sh",
+                (
+                    "TARGET_MODEL=/models/Qwen3.8-27B-FP8\n",
+                    "DRAFT_MODEL=/models/Qwen3.8-27B-DFlash2\n",
+                    "HICACHE_SIZE_GB=96\n",
+                ),
+            ),
+        ):
+            with self.subTest(profile=profile):
+                plan = self.container_plan(self.base_values(), profile=profile)
+                self.assertEqual(plan.errors, [])
+                files = self.generated(plan)
+                startup = files[self.base / "launch out" / "config" / script]
+                for line in wanted:
+                    self.assertIn(line, startup)
+                self.assertIn("\nTP_SIZE=1\n", startup)
+                # The accepted adaptive policy is a Next recipe setting: 27B
+                # stays on DFlash2 and says nothing about it.
+                self.assertEqual("--speculative-adaptive" in startup, profile != "27b")
+                # The generated launcher selects the current release, the same
+                # one the manual run.sh defaults to.
+                self.assertIn(
+                    f"IMAGE={pc.DEFAULT_IMAGE}\n",
+                    files[self.base / "launch out" / "run.sh"],
+                )
+
+    def test_regenerated_next_launches_keep_the_accepted_policy_guard(self):
+        # The approved adaptive MTP policy is guarded by a checksum of the
+        # image's own policy file, so both Next profiles have to carry that
+        # guard after a save: a generated script that dropped it would launch
+        # an unqualified policy without saying so.
+        policy_sha = hashlib.sha256(
+            (ROOT / "configs" / "pennyroyal" / "adaptive-next.json").read_bytes()
+        ).hexdigest()
+        for profile, script in (
+            ("next", "start-flash-next-frspec.sh"),
+            ("next-plain", "start-flash-next.sh"),
+        ):
+            with self.subTest(profile=profile):
+                plan = self.container_plan(self.base_values(), profile=profile)
+                startup = self.generated(plan)[
+                    self.base / "launch out" / "config" / script
+                ]
+                self.assertIn(
+                    'ADAPTIVE_CONFIG="$IMAGE_CONFIGS/adaptive-next.json"', startup
+                )
+                self.assertIn(f'[[ "$ADAPTIVE_SHA" == {policy_sha} ]]', startup)
+                self.assertIn(
+                    '--field "speculative_adaptive_policy_sha256=$ADAPTIVE_SHA"',
+                    startup,
+                )
+                self.assertIn("--speculative-adaptive", startup)
+
+    def test_a_saved_image_pin_survives_regeneration(self):
+        # An operator who pinned a release keeps it: re-saving preserves the
+        # explicit choice instead of quietly moving the launch, and the new
+        # default appears as soon as the pin line is gone.
+        pinned = "ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.1"
+        plan = self.container_plan({**self.base_values(), "PENNYROYAL_IMAGE": pinned})
+        self.assertEqual(plan.env["PENNYROYAL_IMAGE"], pinned)
+        self.assertIn(
+            f"IMAGE={pinned}\n",
+            self.generated(plan)[self.base / "launch out" / "run.sh"],
+        )
+        self.assertEqual(plan.argv[plan.argv.index("--image") + 1], pinned)
+        # Same saved settings, no pin line: the current default is selected.
+        plan = self.container_plan(self.base_values())
+        self.assertIn(
+            f"IMAGE={pc.DEFAULT_IMAGE}\n",
+            self.generated(plan)[self.base / "launch out" / "run.sh"],
+        )
+        self.assertEqual(plan.argv[plan.argv.index("--image") + 1], pc.DEFAULT_IMAGE)
 
     def test_nvme_ple_keeps_its_own_independent_choice(self):
         (self.base / "ple snapshot").mkdir()
