@@ -38,6 +38,11 @@ if _is_cuda or _is_hip:
 
 logger = logging.getLogger(__name__)
 
+# O_DIRECT / L3 page granularity. Every per-slot host stride must be a multiple
+# of this, otherwise the whole hybrid pool is pushed onto bounce buffers by
+# HiCacheNixl._hybrid_pool_supports_zero_copy.
+_SLOT_ALIGN_BYTES = 4096
+
 
 @dataclass
 class _SlotSiblingHostSpec:
@@ -45,6 +50,10 @@ class _SlotSiblingHostSpec:
     device_layers: torch.Tensor
     slot_axis: int
     host_buffer: Optional[torch.Tensor] = None
+    # Page-aligned host stride between slots. 0 means "pack slots tightly at
+    # their logical size"; set by MambaPoolHost for layouts that offer
+    # zero-copy storage I/O.
+    host_bytes_per_slot: int = 0
 
     @property
     def num_layers(self) -> int:
@@ -59,8 +68,52 @@ class _SlotSiblingHostSpec:
         return int(np.prod(self.item_shape))
 
     @property
+    def dtype(self) -> torch.dtype:
+        return self.device_layers.dtype
+
+    @property
+    def item_bytes(self) -> int:
+        """Logical bytes one slot occupies on the device."""
+        return self.num_layers * self.item_numel * self.dtype.itemsize
+
+    @property
     def bytes_per_slot(self) -> int:
-        return self.num_layers * self.item_numel * self.device_layers.dtype.itemsize
+        """Host stride between consecutive slots, in bytes (>= item_bytes)."""
+        return self.host_bytes_per_slot or self.item_bytes
+
+    def host_slot(self, index: int) -> torch.Tensor:
+        """Logical `[num_layers, *item_shape]` view of host slot `index`.
+
+        The host buffer strides by `bytes_per_slot`, which may be padded past
+        `item_bytes` to keep the stride OS-page-aligned.
+        """
+        assert self.host_buffer is not None
+        flat = self.host_buffer[index][: self.num_layers * self.item_numel]
+        return flat.view(self.num_layers, *self.item_shape)
+
+
+def _align_slot_sibling_strides(specs) -> None:
+    """Pad every slot sibling's host stride up to an OS page.
+
+    `HiCacheNixl._hybrid_pool_supports_zero_copy` requires *every* per-slot
+    stride of a hybrid host pool to be page aligned. One sub-page sibling — the
+    int64 ngram context is 16 bytes/slot — otherwise costs the whole pool its
+    zero-copy registration and allocates a
+    `STORAGE_BATCH_SIZE x page_numel` bounce buffer pair instead.
+    """
+    for spec in specs:
+        item_bytes = spec.item_bytes
+        if item_bytes % _SLOT_ALIGN_BYTES == 0:
+            continue
+        pages = -(-item_bytes // _SLOT_ALIGN_BYTES)
+        spec.host_bytes_per_slot = pages * _SLOT_ALIGN_BYTES
+        logger.info(
+            "HiCache host pool: padding slot sibling %r from %d to %d bytes/slot "
+            "to keep the O_DIRECT page alignment.",
+            spec.name,
+            spec.item_bytes,
+            spec.host_bytes_per_slot,
+        )
 
 
 class MambaPoolHost(HostKVCache):
@@ -100,6 +153,12 @@ class MambaPoolHost(HostKVCache):
         self.temporal_dtype = device_pool.mamba_cache.temporal.dtype
         self.dtype = self.conv_dtype
         self.slot_sibling_specs = self._collect_slot_sibling_specs(device_pool)
+        # Force page-aligned host strides for the slot siblings before sizing,
+        # so is_stride_page_aligned() can hand the pool to HiCacheNixl zero-copy.
+        # Only the page-first layouts stride by a fixed per-slot byte count;
+        # layer_first strides by `size`, so leave it tight and bit-identical.
+        if self.layout in ["page_first", "page_first_direct"]:
+            _align_slot_sibling_strides(self.slot_sibling_specs)
         self.size_per_token = self.get_size_per_token()
 
         if host_size > 0:
@@ -233,9 +292,13 @@ class MambaPoolHost(HostKVCache):
                     )
                 )
             for spec in self.slot_sibling_specs:
+                # Flat, page-strided host slots: `host_slot()` slices the real
+                # item back out; the trailing pad only exists to keep
+                # bytes_per_slot a multiple of the O_DIRECT page size.
+                assert spec.bytes_per_slot % spec.dtype.itemsize == 0
                 spec.host_buffer = alloc_func(
-                    (self.size, spec.num_layers, 1) + spec.item_shape,
-                    dtype=spec.device_layers.dtype,
+                    (self.size, spec.bytes_per_slot // spec.dtype.itemsize),
+                    dtype=spec.dtype,
                     device=self.device,
                     pin_memory=self.pin_memory,
                     allocator=self.allocator,
@@ -565,7 +628,7 @@ class MambaPoolHost(HostKVCache):
             for host_slot, device_slot in zip(host_slots, device_slots):
                 if self.layout in ["page_first", "page_first_direct"]:
                     spec.device_layers[:, device_slot].copy_(
-                        host_buffer[host_slot].squeeze(1), non_blocking=True
+                        spec.host_slot(host_slot), non_blocking=True
                     )
                 else:
                     spec.device_layers[:, device_slot].copy_(
@@ -625,7 +688,7 @@ class MambaPoolHost(HostKVCache):
             assert host_buffer is not None
             for host_slot, device_slot in zip(host_slots, device_slots):
                 if self.layout in ["page_first", "page_first_direct"]:
-                    host_buffer[host_slot].squeeze(1).copy_(
+                    spec.host_slot(host_slot).copy_(
                         spec.device_layers[:, device_slot], non_blocking=True
                     )
                 else:

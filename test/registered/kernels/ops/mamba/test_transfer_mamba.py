@@ -413,7 +413,18 @@ def test_mamba_kernel_ple_slot_siblings_roundtrip_and_page_payload():
         "ple_short_conv",
         "ple_ngram",
     ]
+    # This toy geometry stays unaligned because of the *conv* stride
+    # (NUM_LAYERS * 4 * 128 * 2 = 3072 B), not the siblings. The siblings are
+    # pad-aligned so that a pool whose other strides are page multiples hands
+    # HiCacheNixl zero-copy under O_DIRECT instead of allocating the
+    # STORAGE_BATCH_SIZE x page_numel bounce-buffer pair (~15 GB at model
+    # scale, which is what the real 16 B/slot n-gram sibling used to cost).
     assert not host.is_stride_page_aligned(4096)
+    for spec in host.slot_sibling_specs:
+        assert spec.bytes_per_slot % 4096 == 0
+        assert spec.bytes_per_slot > spec.item_bytes
+        # The logical item view must exclude the trailing pad bytes.
+        assert spec.host_slot(0).numel() == spec.num_layers * spec.item_numel
     host.destroy()
 
 
