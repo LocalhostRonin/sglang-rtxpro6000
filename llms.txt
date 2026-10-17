@@ -6,12 +6,14 @@ Canonical repository: https://github.com/jpezzulli/sglang-rtxpro6000
 Display name: Penny Royal. CLI, API model name, paths and package identifiers
 keep the existing `pennyroyal` spelling.
 
-Penny Royal 3.0.1 fixes WSL2 RAM PLE device pointers, persistent TileLang kernel
-caching for custom container UIDs, and NVMe PLE source compatibility. Startup
-logs now identify the Penny Royal version and source commit. Its source tag is
-`pennyroyal-v3.0.1` and image is `ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.1`.
-Read release-3.0.1.json for publication and validation status. The 3.0 feature
-details and measured performance remain in release-3.0.json and RESULTS.md.
+Penny Royal 3.0.2 page-aligns Mamba host-state slots so NIXL can use the existing
+pool for direct I/O, recovering 14.07 GiB of host RAM in the measured Flash-Next
+setup. It adds C1 MTP switch hold/backoff, two narrow 27B DFlash2 corrections,
+and the assistant reasoning-history alias. Existing model weights, precision,
+context capacity and concurrency settings remain. The source tag is
+`pennyroyal-v3.0.2`; the container image is
+`ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.2`. See release-3.0.2.json and the GitHub
+release page for publication/build status.
 
 ## Hardware and profiles
 
@@ -35,6 +37,8 @@ the accepted rowwise-FP8 dense format and small-batch kernels. FR-Spec is
 part of the default and the qualified adaptive configuration, not an alternative
 to adaptation. It stays on at C1 and C2+; only draft-width adaptation is C1-only.
 FR-Spec reduces the draft vocabulary, while the target retains its full vocabulary. The measured checkpoint is jpezzulli/OrcaRouter-Qwen3.8-Flash-Next-Uncensored-ModelOpt-NVFP4.
+The C1 selector keeps learning during a 40-completed-feedback-batch switch hold;
+reversals double the hold up to 80. C2+ still switches immediately to W4.
 The 27B profile requires its separate DFlash2 draft checkpoint.
 
 ## Installation
@@ -67,6 +71,8 @@ are aggregate, not per-request rates. Use normal non-greedy sampling and record
 the actual reasoning settings. A synthetic agent transcript is not a real
 tool workflow.
 
+- [3.0.2 release notes](https://raw.githubusercontent.com/jpezzulli/sglang-rtxpro6000/pennyroyal-main-sm120-final/RELEASE_NOTES_3.0.2.md): Host-memory recovery, MTP switching and focused compatibility fixes.
+- [3.0.2 machine-readable release notes](https://raw.githubusercontent.com/jpezzulli/sglang-rtxpro6000/pennyroyal-main-sm120-final/release-3.0.2.json): Source, qualification and container status.
 - [3.0.1 release notes](https://raw.githubusercontent.com/jpezzulli/sglang-rtxpro6000/pennyroyal-main-sm120-final/RELEASE_NOTES_3.0.1.md): Startup fixes and contributor acknowledgements.
 - [3.0.1 machine-readable release notes](https://raw.githubusercontent.com/jpezzulli/sglang-rtxpro6000/pennyroyal-main-sm120-final/release-3.0.1.json): Fixes, reused qualification and container status.
 - [3.0 release notes](https://raw.githubusercontent.com/jpezzulli/sglang-rtxpro6000/pennyroyal-main-sm120-final/RELEASE_NOTES_3.0.md): Features, performance and direct contributor acknowledgements.

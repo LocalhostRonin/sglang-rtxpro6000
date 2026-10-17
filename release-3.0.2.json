@@ -1,0 +1,185 @@
+{
+  "schema": "release-notes/3.0.2",
+  "version": "3.0.2",
+  "status": {
+    "publication_approved": true,
+    "source_publication": "approved; release publication pending",
+    "container": "pending build"
+  },
+  "source": {
+    "base_release": "pennyroyal-v3.0.1",
+    "reviewed_runtime_revision": "81f006db32978519d09302b9984016d6e1bfd48b",
+    "integrated_runtime_revision": "0908a67fda1bf055a1a777ce8e98a4cfaeddc883",
+    "accepted_setup_revision": "7a545b18f95999dda1b14fe64ea07783f41ce311",
+    "original_contributor_pr": 73,
+    "contributor_merge_revision": "6d5e00a39c14b166497fd77f5ee94d3d9220c85b",
+    "release_tag": "pennyroyal-v3.0.2",
+    "release_url": "https://github.com/jpezzulli/sglang-rtxpro6000/releases/tag/pennyroyal-v3.0.2"
+  },
+  "container": {
+    "image": "ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.2",
+    "digest": null,
+    "build_url": null
+  },
+  "changes": [
+    {
+      "id": "mamba_host_stride",
+      "pr": 73,
+      "summary": "Page-align logical Mamba companion-state host-slot strides so NIXL direct I/O registers the existing host pool instead of allocating redundant bounce buffers. State values and precision are unchanged.",
+      "measured_host_ram_recovered_gib": 14.07,
+      "measurement": "Two 7,205 MiB buffers removed in the measured Flash-Next setup; configuration-dependent host RAM saving, not GPU VRAM.",
+      "profiles": [
+        "Flash-Next; 27B empty slot-sibling path preserved"
+      ]
+    },
+    {
+      "id": "mtp_switch_hold",
+      "summary": "C1 W4/W8 switch grace 40 completed feedback batches, reversal multiplier 2, cap 80; acceptance EMA continues learning and C2+ selects W4 immediately.",
+      "profiles": [
+        "Flash-Next"
+      ]
+    },
+    {
+      "id": "dflash_compact_host_bound",
+      "upstream_pr": 41410,
+      "summary": "Include the verification block after the compact-window clamp in draft host attention lengths.",
+      "profiles": [
+        "27B DFlash2"
+      ]
+    },
+    {
+      "id": "dflash_grammar_mask",
+      "upstream_pr": 43518,
+      "summary": "Clear stale request-level grammar masks before block verification adjustments, preserving per-position constraints and processor ordering.",
+      "profiles": [
+        "27B DFlash2"
+      ]
+    },
+    {
+      "id": "reasoning_history_alias",
+      "upstream_pr": 44109,
+      "summary": "Accept reasoning when reasoning_content is absent/null; preserve a supplied canonical string, including empty.",
+      "profiles": [
+        "Flash-Next",
+        "27B"
+      ]
+    }
+  ],
+  "settings": {
+    "model_weights_changed": false,
+    "precision_changed": false,
+    "dependencies_changed": false,
+    "configured_capacities_changed": false,
+    "diagnostics_enabled": false,
+    "adaptive_policy_sha256": "658158c29d2de8d2ee9c58ea8e7ac68a2dc70dd1ac1c46642e0a4302b798728f"
+  },
+  "validation": {
+    "date": "2026-10-17",
+    "hardware": "RTX PRO 6000 SM120 TP1",
+    "review": "Individual implementation reviews and integration qualification accepted; setup review completed.",
+    "focused_runtime_checks": {
+      "passed": 215,
+      "skipped": 1,
+      "subtests": 121
+    },
+    "setup_checks": {
+      "run": 164,
+      "skipped": 2,
+      "result": "OK"
+    },
+    "both_profiles": {
+      "streaming_tools": "30/30 each",
+      "images": "passed",
+      "cold_prefill_recall_tokens": 489921,
+      "cold_prefill_recall": "all three keys correct",
+      "disk_restart_restore": "63744 KV tokens plus two Mamba states, correct facts"
+    },
+    "next_ram_restore": {
+      "retained_prompt_tokens": 209789,
+      "restored_kv_tokens": 209728,
+      "restored_mamba_states": 2,
+      "recomputed_tokens": 61,
+      "answer": "correct"
+    },
+    "reasoning": {
+      "27b": "Nine cases completed naturally; internal grade 89.70/100, no fatal finding. Not a public quality benchmark.",
+      "next": "All nine cases completed; no accepted fresh aggregate score. Withdrawn output-limit failures are not model failures."
+    },
+    "tp2": "Preserved source support; no fresh local TP2 hardware run.",
+    "diagnostic_removal": "Clean startup/actual response and zero loaded diagnostic monitors verified after removal; full suites and speed screens were run earlier with local diagnostics enabled.",
+    "container_smoke": "pending new image; previous packaging qualification reused because Dockerfile, dependency constraints and build workflow are unchanged."
+  },
+  "performance": {
+    "results_table_policy": "Existing performance tables retained.",
+    "native_mean_and_sampled_peak_tok_s": {
+      "next_short_c1": [
+        194.23869,
+        285.36
+      ],
+      "next_128k_c1": [
+        187.68519,
+        275.93
+      ],
+      "next_320k_c1": [
+        188.25014,
+        299.68
+      ],
+      "next_c4_aggregate": [
+        496.12604,
+        644.96
+      ],
+      "next_c6_aggregate": [
+        457.50336,
+        705.98
+      ],
+      "27b_short_c1": [
+        103.889,
+        162.41
+      ],
+      "27b_c2_aggregate": [
+        202.437,
+        279.17
+      ],
+      "next_coding_isolated_first35_turns": [
+        273.94,
+        534.44
+      ],
+      "next_presentation": [
+        189.267,
+        434.49
+      ]
+    },
+    "conditions": "Native elapsed-weighted complete active-decode intervals and sampled peak; non-greedy/xhigh. Current-RC comparison baselines used private diagnostics, three repeats; C1 4096-output cap, C4/C6 existing queued ShareGPT 1024-output protocol including fill/drain. Coding rate covers only first 35 isolated C1 turns, not the whole job; presentation 136 requests / 177 tool calls / 260,615 output tokens, observed C1. Different older tasks are not matched A/B."
+  },
+  "upgrade": {
+    "matching_startup_files_required": true,
+    "saved_user_settings_preserved": true,
+    "model_redownload_required": false,
+    "blanket_cache_deletion_required": false,
+    "instruction": "Use matching 3.0.2 image/startup files or regenerate with the updated configurator. Update/remove explicit old image pins when upgrading; retaining an old image requires its matching old setup."
+  },
+  "contributors": [
+    {
+      "name": "Kaspar Holmgren",
+      "github": "hiyazakite",
+      "url": "https://github.com/hiyazakite",
+      "contribution": "Original PR73 host-memory fix"
+    },
+    {
+      "name": "Penny Royal",
+      "email": "Pennyroyal@agentmail.to",
+      "contribution": "MTP/DFlash/history fixes and setup update"
+    }
+  ],
+  "excluded": [
+    "Maya cost-based selector",
+    "FP8 KV writer PR35",
+    "min_p sampler change",
+    "parked broader RC"
+  ],
+  "remaining": [
+    "container build and exact-image check",
+    "public image identity verification",
+    "stable native-main transition with diagnostics OFF"
+  ]
+}
