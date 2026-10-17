@@ -3,8 +3,8 @@
   "version": "3.0.2",
   "status": {
     "publication_approved": true,
-    "source_publication": "approved; release publication pending",
-    "container": "pending build"
+    "source_publication": "published",
+    "container": "building"
   },
   "source": {
     "base_release": "pennyroyal-v3.0.1",
@@ -14,12 +14,13 @@
     "original_contributor_pr": 73,
     "contributor_merge_revision": "6d5e00a39c14b166497fd77f5ee94d3d9220c85b",
     "release_tag": "pennyroyal-v3.0.2",
-    "release_url": "https://github.com/jpezzulli/sglang-rtxpro6000/releases/tag/pennyroyal-v3.0.2"
+    "release_url": "https://github.com/jpezzulli/sglang-rtxpro6000/releases/tag/pennyroyal-v3.0.2",
+    "published_revision": "6b501b800181756890561fe3107c2ed551c1d302"
   },
   "container": {
     "image": "ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.2",
     "digest": null,
-    "build_url": null
+    "build_url": "https://github.com/jpezzulli/sglang-rtxpro6000/actions/runs/39050305144"
   },
   "changes": [
     {
