@@ -2063,7 +2063,9 @@ class ContainerLaunchGenerationTests(FixtureMixin):
     def test_a_saved_image_pin_survives_regeneration(self):
         # An operator who pinned a release keeps it: re-saving preserves the
         # explicit choice instead of quietly moving the launch, and the new
-        # default appears as soon as the pin line is gone.
+        # default appears as soon as the pin line is gone. Only preservation is
+        # checked here: that older image still needs the setup files that
+        # belong to it, as the setup guide says.
         pinned = "ghcr.io/jpezzulli/sglang-rtxpro6000:v3.0.1"
         plan = self.container_plan({**self.base_values(), "PENNYROYAL_IMAGE": pinned})
         self.assertEqual(plan.env["PENNYROYAL_IMAGE"], pinned)

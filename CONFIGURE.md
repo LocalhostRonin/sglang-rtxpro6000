@@ -99,10 +99,13 @@ Keep the configuration you currently use, generate a new one with the new
 checkout, and use its printed command when you are ready to switch.
 
 A saved container setting that names an image explicitly (`PENNYROYAL_IMAGE=`)
-survives every later save: setup keeps your pin rather than moving you to a
-new release. To follow the new default, delete that line from the file you are
-re-saving, or set it to the new tag; either way the save writes a fresh folder
-and the old launch files stay as they were.
+survives every later save: setup keeps your choice rather than moving you to a
+new release. Before regenerating with a new checkout, update that line to the new
+image or delete it to take the new default, because generated startup files
+belong to the image they were generated with and the new ones will not run on an
+older image. Staying on an older image is fine: keep using that release's setup
+files for it. Either way a save writes a fresh folder, and the files you already
+have stay as they were.
 
 <!-- Compatibility anchors for earlier versions of this guide. -->
 <a id="configure-pennyroyal-with-configure-penny"></a>

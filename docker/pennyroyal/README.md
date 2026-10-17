@@ -121,12 +121,14 @@ Stop with Ctrl-C. Edit your host settings and run the same command to start
 again. Your model files and persistent caches remain in their host folders.
 
 To upgrade, review the new release's sample startup files before restarting:
-the startup script belongs to the same release as the image. Where a pin
-overrides the launcher's default, move it with the release: set `IMAGE=` to the
-new tag in a `run.sh` you edited (keep the assignment; the script runs under
-`set -u`) or pass `--image`. A `PENNYROYAL_IMAGE=` line in saved configurator
-settings (see [the setup guide](../../CONFIGURE.md#update-the-setup-files)) or
-in the Compose `.env` can instead be deleted to follow the new default.
+the startup script belongs to the same release as the image, and new startup
+files need the new image. Where a pin overrides the launcher's default, move it
+with the release: set `IMAGE=` to the new tag in a `run.sh` you edited (keep the
+assignment; the script runs under `set -u`) or pass `--image`. A
+`PENNYROYAL_IMAGE=` line in saved configurator settings (see
+[the setup guide](../../CONFIGURE.md#update-the-setup-files)) or in the Compose
+`.env` can instead be deleted to follow the new default. To stay on an older
+image deliberately, keep that release's startup files as well.
 
 ## Optional disk caching
 
