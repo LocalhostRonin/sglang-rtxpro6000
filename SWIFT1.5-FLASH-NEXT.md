@@ -38,8 +38,9 @@ python3 scripts/pennyroyal/transplant_ple_fp8.py \
 ```
 
 The assembler validates before it writes: base PLE dtype is BF16, FP8 shards
-are pure-PLE (`model.language_model.layers.1.ple.*` only) with F8_E4M3 ngram
-tables and a per-tensor `weight_scale`, the base's `quantization_config.ignore`
+are pure-PLE (`model.language_model.layers.1.ple.*` only) with every ngram
+table F8_E4M3, rank-2 and byte-complete, sharing one width and carrying their
+module's own per-tensor `weight_scale`, the base's `quantization_config.ignore`
 covers every transplanted tensor (the FP8 bytes are never offered to the NVFP4
 dequant path), the transplant boundary is shard-aligned, and the copy plan
 agrees with the generated index. Every refusal prints `REFUSE:` with the

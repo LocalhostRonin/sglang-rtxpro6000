@@ -36,7 +36,9 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import math
 import os
+import re
 import shutil
 import struct
 import sys
@@ -49,6 +51,15 @@ FP8_PLE_DTYPE = "float8_e4m3fn"
 INDEX_NAME = "model.safetensors.index.json"
 HEADER_SIZE_MAX = 128 * 1024 * 1024
 NGRAM_MARKER = ".ngram_embedding."
+# The engine binds exactly one weight per ngram table: <module>.ngram_embedding
+# .shard_<N>.weight (models/qwen4_exp.py raises on any other PLE weight).
+NGRAM_TABLE = re.compile(r"^shard_\d+\.weight$")
+NGRAM_SCALE = "weight_scale"
+# Element sizes for the dtypes this tool may meet in a PLE shard, used to prove
+# a declared shape matches the bytes the header reserves for it.
+ELEMENT_SIZE = {"F64": 8, "F32": 4, "F16": 2, "BF16": 2, "F8_E4M3": 1, "F8_E5M2": 1}
+FP8_TABLE_DTYPE = "F8_E4M3"
+ALLOWED_SCALES = ("F64", "F32", "F16", "BF16", "F8_E4M3", "F8_E5M2")
 # Non-shard files the assembled checkpoint takes from the FP8 PLE source
 # (tokenizer/serialization assets); config and index are generated here.
 LEADER_FILES = (
@@ -148,8 +159,9 @@ def validate_base(base_dir: Path) -> tuple[dict, dict[str, str]]:
 
 
 def validate_ple_source(ple_dir: Path, ple_glob: str) -> tuple[list[str], dict[str, dict]]:
-    """Check the FP8 PLE shards: present, F8_E4M3, pure-PLE, scale-complete;
-    and the leader files the checkpoint takes from this side are present."""
+    """Check the FP8 PLE shards: present, every ngram table FP8 and well formed,
+    each module's scale bound, pure-PLE; and the leader files the checkpoint
+    takes from this side are present."""
     shards = sorted(p.name for p in ple_dir.glob(ple_glob))
     if not shards:
         refuse(f"no shards matching {ple_glob!r} in {ple_dir}")
@@ -157,6 +169,8 @@ def validate_ple_source(ple_dir: Path, ple_glob: str) -> tuple[list[str], dict[s
     if missing:
         refuse(f"PLE source is missing leader files the checkpoint needs: {missing}")
     inventory: dict[str, dict] = {}
+    tables: dict[str, list[str]] = {}
+    widths: dict[str, int] = {}
     for shard in shards:
         header = read_safetensors_header(ple_dir / shard)
         for name, meta in header.items():
@@ -168,19 +182,69 @@ def validate_ple_source(ple_dir: Path, ple_glob: str) -> tuple[list[str], dict[s
             if name in inventory:
                 refuse(f"tensor {name} claimed twice (in {inventory[name]['shard']} "
                        f"and {shard})")
-            dtype = meta["dtype"]
-            if dtype not in {"F8_E4M3", "BF16"}:
-                refuse(f"{shard}: tensor {name} has dtype {dtype}; expected F8_E4M3 "
-                       "tables (BF16 allowed only for weight_scale)")
+            suffix = (name.rsplit(NGRAM_MARKER, 1)[1]
+                      if NGRAM_MARKER in name else None)
+            if suffix == NGRAM_SCALE:
+                _validate_ple_scale(shard, name, meta)
+            elif suffix is not None and NGRAM_TABLE.match(suffix):
+                module = name[: name.index(NGRAM_MARKER)]
+                shape = _validate_ple_table(shard, name, meta)
+                if widths.setdefault(module, shape[1]) != shape[1]:
+                    refuse(f"{shard}: PLE table {name} is {shape[1]} columns wide, "
+                           f"but {module} tables are {widths[module]} columns; every "
+                           "table of one PLE module fills the same embedding")
+                tables.setdefault(module, []).append(name)
+            elif suffix is not None and name.endswith(".weight"):
+                refuse(f"{shard}: unsupported PLE weight layout (expected "
+                       f"ngram_embedding.shard_N.weight): {name}")
+            elif meta["dtype"] not in {FP8_TABLE_DTYPE, "BF16"}:
+                refuse(f"{shard}: tensor {name} has dtype {meta['dtype']}; expected "
+                       "F8_E4M3 tables (BF16 allowed only for weight_scale)")
             inventory[name] = {"shard": shard, **meta}
-    fp8_tables = [n for n in inventory
-                  if NGRAM_MARKER in n and inventory[n]["dtype"] == "F8_E4M3"]
-    if not fp8_tables:
+    if not tables:
         refuse("no F8_E4M3 ngram tables found; the PLE source is not an FP8 checkpoint")
-    if not any(n.endswith("weight_scale") for n in inventory):
-        refuse("no weight_scale tensor in the PLE shards; an FP8 table without its "
-               "per-tensor scale loads as garbage")
+    for module in sorted(tables):
+        scale = module + NGRAM_MARKER + NGRAM_SCALE
+        if scale not in inventory:
+            refuse(f"{len(tables[module])} FP8 PLE tables under {module} without "
+                   f"{scale}: an FP8 table without its per-tensor scale loads as "
+                   "garbage")
     return shards, inventory
+
+
+def _validate_ple_scale(shard: str, name: str, meta: dict) -> None:
+    """The loader's weight_scale buffer is one element, and it casts to BF16."""
+    if meta["dtype"] not in ALLOWED_SCALES:
+        refuse(f"{shard}: {name} has dtype {meta['dtype']}; a PLE weight_scale must "
+               "be a float tensor")
+    if meta["shape"] != [1]:
+        refuse(f"{shard}: {name} has shape {meta['shape']}; the loader's "
+               "weight_scale buffer is a single element and a differing shape "
+               "raises at load time")
+    _require_declared_bytes(shard, name, meta, [1])
+
+
+def _validate_ple_table(shard: str, name: str, meta: dict) -> list[int]:
+    """An ngram table must be FP8 and a rank-2 block of exactly that many bytes."""
+    if meta["dtype"] != FP8_TABLE_DTYPE:
+        refuse(f"{shard}: PLE table {name} has dtype {meta['dtype']}; every ngram "
+               f"table must be {FP8_TABLE_DTYPE}, because the transplanted "
+               "checkpoint declares FP8 PLE end to end")
+    shape = meta["shape"]
+    if len(shape) != 2 or min(shape) <= 0:
+        refuse(f"{shard}: PLE table {name} has shape {shape}; ngram tables must be "
+               "rank-2 [rows, columns] like the embedding they fill")
+    _require_declared_bytes(shard, name, meta, shape)
+    return shape
+
+
+def _require_declared_bytes(shard: str, name: str, meta: dict, shape: list[int]) -> None:
+    """A PLE tensor's byte span must cover its declared shape exactly."""
+    span = meta["data_offsets"][1] - meta["data_offsets"][0]
+    needed = math.prod(shape) * ELEMENT_SIZE[meta["dtype"]]
+    if span != needed:
+        refuse(f"{shard}: PLE tensor {name} reserves {span} bytes for shape "
+               f"{shape} of {meta['dtype']}, which needs {needed}")
 
 
 def validate_quant_ignore(config: dict, ple_inventory: dict[str, dict]) -> None:

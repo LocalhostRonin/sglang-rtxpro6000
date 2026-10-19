@@ -15,7 +15,9 @@ SPEC.loader.exec_module(MODULE)
 PLE_MODULE = MODULE.PLE_MODULE
 NGRAM0 = PLE_MODULE + "ple_embedding.ngram_embedding.shard_0.weight"
 NGRAM1 = PLE_MODULE + "ple_embedding.ngram_embedding.shard_1.weight"
+NGRAM_FLAT = PLE_MODULE + "ple_embedding.ngram_embedding.weight"
 WEIGHT_SCALE = PLE_MODULE + "ple_embedding.ngram_embedding.weight_scale"
+STRAY_SCALE = PLE_MODULE + "conv1d.weight_scale"
 KEEP_PLE = [
     PLE_MODULE + "conv1d.weight",
     PLE_MODULE + "ple_embedding.layer_multipliers",
@@ -79,7 +81,9 @@ def build_ple_source(directory: Path) -> None:
         (directory / name).write_bytes(f"leader:{name}".encode("utf-8"))
 
 
-class TransplantTest(unittest.TestCase):
+class TransplantFixture(unittest.TestCase):
+    """Shared fixture: a BF16-PLE base, an FP8 PLE source, and helpers."""
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
@@ -98,6 +102,9 @@ class TransplantTest(unittest.TestCase):
         with self.assertRaises(MODULE.Refuse) as caught:
             self.assemble(**overrides)
         return str(caught.exception)
+
+
+class TransplantTest(TransplantFixture):
 
     def test_happy_path_writes_complete_checkpoint(self):
         report = self.assemble()
@@ -252,6 +259,86 @@ class TransplantTest(unittest.TestCase):
         weight_map = json.loads(
             (self.base / "model.safetensors.index.json").read_text())["weight_map"]
         self.assertEqual(MODULE.base_ple_shards(weight_map), {BASE_PLE_SHARD})
+
+
+class PLETableCensusTest(TransplantFixture):
+    """Every ngram table is FP8, rank-2, and has its own module's scale."""
+
+    def refuse_tables(self, **overrides):
+        tensors = {
+            NGRAM0: {"dtype": "F8_E4M3", "shape": [4, 4], "data_offsets": [0, 16]},
+            NGRAM1: {"dtype": "F8_E4M3", "shape": [4, 4], "data_offsets": [16, 32]},
+            WEIGHT_SCALE: {"dtype": "BF16", "shape": [1], "data_offsets": [32, 34]},
+        }
+        for name, value in overrides.items():
+            if value is None:
+                del tensors[name]
+            else:
+                tensors[name] = value
+        write_safetensors(self.ple / FP8_SHARD, tensors)
+        return self.refuse()
+
+    def test_refuses_bf16_table_beside_fp8_tables(self):
+        # Mixed BF16/FP8 donors were accepted: the BF16 bytes reach the
+        # FP8-resident PLE path and the table reads as garbage at half length.
+        message = self.refuse_tables(**{NGRAM1: {"dtype": "BF16", "shape": [2, 4],
+                                                 "data_offsets": [16, 32]}})
+        self.assertIn("dtype BF16", message)
+
+    def test_refuses_flat_ngram_table(self):
+        # The loader only accepts shard_N tables and raises on a flat
+        # ngram_embedding.weight, whatever its dtype.
+        message = self.refuse_tables(**{
+            NGRAM_FLAT: {"dtype": "F8_E4M3", "shape": [4, 4],
+                         "data_offsets": [32, 48]},
+            WEIGHT_SCALE: {"dtype": "BF16", "shape": [1], "data_offsets": [48, 50]},
+        })
+        self.assertIn("unsupported PLE weight layout", message)
+
+    def test_refuses_scale_that_is_not_bound_to_the_tables(self):
+        # A weight_scale on another module does not dequantize the ngram
+        # tables: the loader only fills the embedding's own buffer.
+        message = self.refuse_tables(**{WEIGHT_SCALE: None,
+                                        STRAY_SCALE: {"dtype": "BF16", "shape": [1],
+                                                      "data_offsets": [32, 34]}})
+        self.assertIn(WEIGHT_SCALE, message)
+
+    def test_refuses_scale_that_is_not_one_element(self):
+        # The loader compares the checkpoint scale against its own one-element
+        # buffer and raises on any other shape; REFUSE here instead.
+        message = self.refuse_tables(**{WEIGHT_SCALE: {"dtype": "BF16", "shape": [2],
+                                                       "data_offsets": [32, 36]}})
+        self.assertIn("single element", message)
+
+    def test_refuses_integer_scale(self):
+        message = self.refuse_tables(**{WEIGHT_SCALE: {"dtype": "I64", "shape": [1],
+                                                       "data_offsets": [32, 40]}})
+        self.assertIn("must be a float tensor", message)
+
+    def test_refuses_rank_one_table(self):
+        message = self.refuse_tables(**{NGRAM0: {"dtype": "F8_E4M3", "shape": [16],
+                                                 "data_offsets": [0, 16]}})
+        self.assertIn("rank-2", message)
+
+    def test_refuses_tables_of_differing_width(self):
+        message = self.refuse_tables(**{NGRAM1: {"dtype": "F8_E4M3", "shape": [4, 8],
+                                                 "data_offsets": [16, 48]}})
+        self.assertIn("columns", message)
+
+    def test_refuses_table_bytes_that_disagree_with_its_shape(self):
+        message = self.refuse_tables(**{NGRAM0: {"dtype": "F8_E4M3", "shape": [4, 4],
+                                                 "data_offsets": [0, 8]}})
+        self.assertIn("8 bytes", message)
+
+    def test_accepts_unequal_row_counts_and_other_float_scale_dtypes(self):
+        # The last shard of a split table is legitimately shorter and any float
+        # scale dtype reaches the loader's cast: neither may be refused.
+        write_safetensors(self.ple / FP8_SHARD, {
+            NGRAM0: {"dtype": "F8_E4M3", "shape": [4, 4], "data_offsets": [0, 16]},
+            NGRAM1: {"dtype": "F8_E4M3", "shape": [2, 4], "data_offsets": [16, 24]},
+            WEIGHT_SCALE: {"dtype": "F32", "shape": [1], "data_offsets": [24, 28]},
+        })
+        self.assertEqual(self.assemble()["ple_tensors"], 3)
 
 
 class CliTest(unittest.TestCase):
