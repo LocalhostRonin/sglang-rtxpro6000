@@ -42,7 +42,10 @@ def write_safetensors(path: Path, tensors: dict[str, dict]) -> None:
 def base_config_payload() -> dict:
     return {
         "architectures": ["Qwen4ExpForConditionalGeneration"],
-        "text_config": {"ple_embedding_dtype": "bfloat16", "hidden_size": 8},
+        # ple_embed_dim 4 over (ngram_size-1)*heads_per_ngram = 1 head: every
+        # ngram table must therefore be 4 columns wide, as the fixture's are.
+        "text_config": {"ple_embedding_dtype": "bfloat16", "hidden_size": 8,
+                        "ple_embed_dim": 4, "ngram_size": 2, "heads_per_ngram": 1},
         "quantization_config": {
             "quant_method": "modelopt",
             "ignore": ["lm_head", "model.language_model.embed_tokens",
@@ -339,6 +342,61 @@ class PLETableCensusTest(TransplantFixture):
             WEIGHT_SCALE: {"dtype": "F32", "shape": [1], "data_offsets": [24, 28]},
         })
         self.assertEqual(self.assemble()["ple_tensors"], 3)
+
+    def test_refuses_table_narrower_than_the_target_embedding(self):
+        # 4 columns of target geometry, 1-column donor: torch copies by
+        # broadcasting the single column across the row, no error, wrong table.
+        message = self.refuse_tables(**{
+            NGRAM0: {"dtype": "F8_E4M3", "shape": [4, 1], "data_offsets": [0, 4]},
+            NGRAM1: {"dtype": "F8_E4M3", "shape": [4, 1], "data_offsets": [4, 8]},
+            WEIGHT_SCALE: {"dtype": "BF16", "shape": [1], "data_offsets": [8, 10]},
+        })
+        self.assertIn("1 columns wide", message)
+
+    def test_refuses_table_wider_than_the_target_embedding(self):
+        # Consistent donor widths are not enough: the target is 4 columns, so
+        # 2-column tables fail when they are copied into the embedding.
+        message = self.refuse_tables(**{
+            NGRAM0: {"dtype": "F8_E4M3", "shape": [8, 2], "data_offsets": [0, 16]},
+            NGRAM1: {"dtype": "F8_E4M3", "shape": [8, 2], "data_offsets": [16, 32]},
+        })
+        self.assertIn("2 columns wide", message)
+
+    def test_refuses_table_width_without_base_ple_shards(self):
+        # The supported pruned-base mode: the base's BF16 tables are gone, so
+        # the geometry has to come from config.json, not from their headers.
+        (self.base / BASE_PLE_SHARD).unlink()
+        (self.base / "model.safetensors.index.json").unlink()
+        message = self.refuse_tables(**{
+            NGRAM0: {"dtype": "F8_E4M3", "shape": [4, 1], "data_offsets": [0, 4]},
+            NGRAM1: {"dtype": "F8_E4M3", "shape": [4, 1], "data_offsets": [4, 8]},
+            WEIGHT_SCALE: {"dtype": "BF16", "shape": [1], "data_offsets": [8, 10]},
+        })
+        self.assertIn("1 columns wide", message)
+
+    def test_assembles_pruned_base_with_matching_width(self):
+        (self.base / BASE_PLE_SHARD).unlink()
+        (self.base / "model.safetensors.index.json").unlink()
+        self.assertEqual(self.assemble()["ple_shards_transplanted"], 1)
+
+    def set_text_config(self, **values):
+        config = json.loads((self.base / "config.json").read_text())
+        config["text_config"].update(values)
+        for key in ("hidden_size", "ple_embed_dim"):
+            if key in values and values[key] is None:
+                del config["text_config"][key]
+        (self.base / "config.json").write_text(json.dumps(config))
+
+    def test_refuses_base_without_usable_ple_geometry(self):
+        self.set_text_config(ple_embed_dim=None, hidden_size=None)
+        self.assertIn("geometry cannot be established", self.refuse())
+
+    def test_refuses_base_geometry_the_loader_itself_rejects(self):
+        # 6 columns over 4 heads: the engine raises on the indivisible config.
+        self.set_text_config(ple_embed_dim=6, ngram_size=3, heads_per_ngram=2)
+        self.assertIn("not divisible", self.refuse())
+        self.set_text_config(ple_embed_dim=4, ngram_size=1)
+        self.assertIn("ngram_size", self.refuse())
 
 
 class TruncationTest(TransplantFixture):

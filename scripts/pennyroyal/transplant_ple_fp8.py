@@ -55,6 +55,9 @@ NGRAM_MARKER = ".ngram_embedding."
 # .shard_<N>.weight (models/qwen4_exp.py raises on any other PLE weight).
 NGRAM_TABLE = re.compile(r"^shard_\d+\.weight$")
 NGRAM_SCALE = "weight_scale"
+# Qwen4ExpTextConfig defaults; the engine derives the table width from them.
+NGRAM_SIZE_DEFAULT = 3
+HEADS_PER_NGRAM_DEFAULT = 8
 # Element sizes for the dtypes this tool may meet in a PLE shard, used to prove
 # a declared shape matches the bytes the header reserves for it.
 ELEMENT_SIZE = {"F64": 8, "F32": 4, "F16": 2, "BF16": 2, "F8_E4M3": 1, "F8_E5M2": 1}
@@ -171,10 +174,41 @@ def validate_base(base_dir: Path) -> tuple[dict, dict[str, str]]:
     return config, base_weight_map
 
 
-def validate_ple_source(ple_dir: Path, ple_glob: str) -> tuple[list[str], dict[str, dict]]:
-    """Check the FP8 PLE shards: present, every ngram table FP8 and well formed,
-    each module's scale bound, pure-PLE; and the leader files the checkpoint
-    takes from this side are present."""
+def target_table_width(text_config: dict) -> int:
+    """Columns every ngram table must carry, from the base checkpoint's config.
+
+    models/qwen4_exp.py builds the embedding as ``ple_embed_dim // ((ngram_size
+    - 1) * heads_per_ngram)`` columns per head and copies each checkpoint table
+    into it, so a table of any other width either broadcasts one column across
+    the row (one-column donors, no error, wrong embedding) or fails mid-load.
+    Config defaults follow Qwen4ExpTextConfig, and this works for a pruned base
+    whose own PLE headers are gone: the geometry lives in config.json.
+    """
+    dim = text_config.get("ple_embed_dim") or text_config.get("hidden_size")
+    if not isinstance(dim, int) or dim <= 0:
+        refuse("base config.json gives no usable ple_embed_dim or hidden_size; the "
+               "PLE target geometry cannot be established")
+    ngram_size = text_config.get("ngram_size", NGRAM_SIZE_DEFAULT)
+    heads = text_config.get("heads_per_ngram", HEADS_PER_NGRAM_DEFAULT)
+    if not isinstance(ngram_size, int) or ngram_size < 2:
+        refuse(f"base ngram_size={ngram_size!r}; the loader requires an integer "
+               "of 2 or more")
+    if not isinstance(heads, int) or heads <= 0:
+        refuse(f"base heads_per_ngram={heads!r}; the loader requires a positive "
+               "integer")
+    ngram_heads = (ngram_size - 1) * heads
+    if dim % ngram_heads:
+        refuse(f"base ple_embed_dim={dim} is not divisible by the {ngram_heads} "
+               "ngram heads the config declares; the loader rejects this "
+               "checkpoint before any table is read")
+    return dim // ngram_heads
+
+
+def validate_ple_source(ple_dir: Path, ple_glob: str,
+                        table_width: int) -> tuple[list[str], dict[str, dict]]:
+    """Check the FP8 PLE shards: present, every ngram table FP8, well formed and
+    as wide as the target embedding, each module's scale bound, pure-PLE; and
+    the leader files the checkpoint takes from this side are present."""
     shards = sorted(p.name for p in ple_dir.glob(ple_glob))
     if not shards:
         refuse(f"no shards matching {ple_glob!r} in {ple_dir}")
@@ -183,7 +217,6 @@ def validate_ple_source(ple_dir: Path, ple_glob: str) -> tuple[list[str], dict[s
         refuse(f"PLE source is missing leader files the checkpoint needs: {missing}")
     inventory: dict[str, dict] = {}
     tables: dict[str, list[str]] = {}
-    widths: dict[str, int] = {}
     for shard in shards:
         header = read_safetensors_header(ple_dir / shard)
         for name, meta in header.items():
@@ -201,11 +234,7 @@ def validate_ple_source(ple_dir: Path, ple_glob: str) -> tuple[list[str], dict[s
                 _validate_ple_scale(shard, name, meta)
             elif suffix is not None and NGRAM_TABLE.match(suffix):
                 module = name[: name.index(NGRAM_MARKER)]
-                shape = _validate_ple_table(shard, name, meta)
-                if widths.setdefault(module, shape[1]) != shape[1]:
-                    refuse(f"{shard}: PLE table {name} is {shape[1]} columns wide, "
-                           f"but {module} tables are {widths[module]} columns; every "
-                           "table of one PLE module fills the same embedding")
+                _validate_ple_table(shard, name, meta, table_width)
                 tables.setdefault(module, []).append(name)
             elif suffix is not None and name.endswith(".weight"):
                 refuse(f"{shard}: unsupported PLE weight layout (expected "
@@ -237,8 +266,9 @@ def _validate_ple_scale(shard: str, name: str, meta: dict) -> None:
     _require_declared_bytes(shard, name, meta, [1])
 
 
-def _validate_ple_table(shard: str, name: str, meta: dict) -> list[int]:
-    """An ngram table must be FP8 and a rank-2 block of exactly that many bytes."""
+def _validate_ple_table(shard: str, name: str, meta: dict, table_width: int) -> None:
+    """An ngram table must be FP8, as wide as the embedding it fills, and hold
+    exactly the bytes its shape claims."""
     if meta["dtype"] != FP8_TABLE_DTYPE:
         refuse(f"{shard}: PLE table {name} has dtype {meta['dtype']}; every ngram "
                f"table must be {FP8_TABLE_DTYPE}, because the transplanted "
@@ -247,8 +277,12 @@ def _validate_ple_table(shard: str, name: str, meta: dict) -> list[int]:
     if len(shape) != 2 or min(shape) <= 0:
         refuse(f"{shard}: PLE table {name} has shape {shape}; ngram tables must be "
                "rank-2 [rows, columns] like the embedding they fill")
+    if shape[1] != table_width:
+        refuse(f"{shard}: PLE table {name} is {shape[1]} columns wide, but the base "
+               f"config declares {table_width} columns per ngram head table "
+               "(ple_embed_dim // ((ngram_size - 1) * heads_per_ngram)); the load "
+               "would broadcast or fail on this table")
     _require_declared_bytes(shard, name, meta, shape)
-    return shape
 
 
 def _require_declared_bytes(shard: str, name: str, meta: dict, shape: list[int]) -> None:
@@ -371,7 +405,8 @@ def assemble(base_dir: Path, ple_dir: Path, out_dir: Path, ple_glob: str,
         refuse(f"out-dir already exists: {out_dir}; the assembler never writes into "
                "an existing directory")
     base_config, base_weight_map = validate_base(base_dir)
-    ple_shards, ple_inventory = validate_ple_source(ple_dir, ple_glob)
+    ple_shards, ple_inventory = validate_ple_source(
+        ple_dir, ple_glob, target_table_width(base_config["text_config"]))
     validate_quant_ignore(base_config, ple_inventory)
     index = build_index(base_weight_map, ple_inventory)
 
