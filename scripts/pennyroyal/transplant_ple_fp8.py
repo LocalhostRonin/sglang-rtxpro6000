@@ -320,18 +320,18 @@ def build_index(base_weight_map: dict[str, str], ple_inventory: dict[str, dict])
     return {"metadata": {"total_size": 0}, "weight_map": merged}
 
 
-def index_total_size(dirs: list[Path], claimed: set[str]) -> int:
-    """Sum each shard's data region, the safetensors total_size convention."""
+def index_total_size(shard_sources: dict[str, Path]) -> int:
+    """Sum each copied shard's data region, the safetensors total_size convention.
+
+    Keyed by destination name and resolved to the file that actually ships, so
+    a shard name present under both parents is counted once instead of twice.
+    """
     total = 0
-    for directory in dirs:
-        for shard in sorted(claimed):
-            path = directory / shard
-            if not path.is_file():
-                continue
-            header = read_safetensors_header(path)
-            ends = [meta["data_offsets"][1] for name, meta in header.items()
-                    if name != "__metadata__"]
-            total += max(ends) if ends else 0
+    for path in sorted(shard_sources.values()):
+        header = read_safetensors_header(path)
+        ends = [meta["data_offsets"][1] for name, meta in header.items()
+                if name != "__metadata__"]
+        total += max(ends) if ends else 0
     return total
 
 
@@ -341,12 +341,17 @@ def plan_copies(base_dir: Path, ple_dir: Path, ple_shards: list[str],
     pure-PLE base shards; plus the FP8 shards and the leader files from the
     PLE source."""
     replaced = base_ple_shards(base_weight_map)
+    from_ple = set(ple_shards)
     plan: list[tuple[Path, str]] = []
     for path in sorted(base_dir.iterdir()):
         if not path.is_file():
             continue
         if path.name in (INDEX_NAME, "config.json", *LEADER_FILES) or path.name in replaced:
             continue
+        if path.name in from_ple:
+            refuse(f"{path.name} is a shard of the base checkpoint and of the PLE "
+                   "source; the copy ships the PLE side's bytes, so the tensors the "
+                   "base claims from it would not be in the assembled checkpoint")
         plan.append((path, path.name))
     for shard in sorted(ple_shards):
         plan.append((ple_dir / shard, shard))
@@ -380,7 +385,7 @@ def assemble(base_dir: Path, ple_dir: Path, out_dir: Path, ple_glob: str,
                f"(missing={sorted(claimed - copied_shards)[:3]}, "
                f"extra={sorted(copied_shards - claimed)[:3]})")
     index["metadata"]["total_size"] = index_total_size(
-        [base_dir, ple_dir], claimed)
+        {dst: src for src, dst in plan if dst.endswith(".safetensors")})
 
     report = {
         "files_copied": len(plan),

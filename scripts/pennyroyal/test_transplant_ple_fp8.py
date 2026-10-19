@@ -367,6 +367,35 @@ class TruncationTest(TransplantFixture):
         self.assertTrue(self.assemble()["total_size"])
 
 
+class TotalSizeTest(TransplantFixture):
+    """A shard name coming from both parents must not be counted twice."""
+
+    def test_stray_shard_named_like_a_base_shard_counts_once(self):
+        # The donor directory also holds model-layer-00001.safetensors, which
+        # the glob ignores and the copy never takes; summing the claimed names
+        # in both parents still added its 8 bytes to the assembled index.
+        write_safetensors(self.ple / BASE_KEEP_SHARD, {
+            "model.language_model.layers.9.attn.qkv.weight":
+                {"dtype": "F32", "shape": [2], "data_offsets": [0, 8]},
+        })
+        self.assertEqual(self.assemble()["total_size"], 12 + 34)
+
+    def test_refuses_shard_name_claimed_by_both_parents(self):
+        # The same name with different contents: the PLE side's file overwrites
+        # the base's copy, so the index would claim the base tensor from bytes
+        # that never ship and total_size would add both.
+        write_safetensors(self.base / FP8_SHARD, {
+            "model.language_model.layers.7.attn.qkv.weight":
+                {"dtype": "F32", "shape": [2], "data_offsets": [0, 8]},
+        })
+        index_path = self.base / "model.safetensors.index.json"
+        weight_map = json.loads(index_path.read_text())["weight_map"]
+        weight_map["model.language_model.layers.7.attn.qkv.weight"] = FP8_SHARD
+        index_path.write_text(json.dumps({"metadata": {}, "weight_map": weight_map}))
+        self.assertIn("is a shard of the base checkpoint and of the PLE source",
+                      self.refuse())
+
+
 class CliTest(unittest.TestCase):
     def test_main_reports_verdict(self):
         tmp = tempfile.TemporaryDirectory()
