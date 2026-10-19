@@ -108,7 +108,11 @@ class _Fetcher:
 
     def fetch_json(self, cache_key: str, url: str) -> dict:
         if self.cache_dir is not None:
-            path = self.cache_dir / cache_key
+            # cache_key labels the artifact ("a_meta.json"); the URL digest is
+            # what keeps two repos, revisions or endpoints from sharing one
+            # entry. Without it a re-run for another pair reads stale metadata.
+            digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+            path = self.cache_dir / f"{cache_key}-{digest}.json"
             if path.exists():
                 return json.loads(path.read_bytes())
             payload = self.fetch(url)

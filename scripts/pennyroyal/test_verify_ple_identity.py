@@ -228,7 +228,27 @@ class CacheTest(unittest.TestCase):
         second = fetcher.fetch_json("k.json", "https://example/api")
         self.assertEqual(first, second)
         self.assertEqual(len(calls), 1)  # second read came from disk
-        self.assertTrue((cache / "k.json").is_file())
+        self.assertTrue(list(cache.glob("k.json-*.json")))
+        tmp.cleanup()
+
+    def test_cache_identity_carries_the_url(self):
+        # The same cache label serves both repos and both revisions of a run;
+        # keying on the label alone reuses another repo's metadata, so a
+        # re-run against a different pair reports a stale verdict.
+        tmp = tempfile.TemporaryDirectory()
+        fetcher = MODULE._Fetcher(Path(tmp.name))
+        calls = []
+
+        def fake_fetch(url, rng=None, timeout=300):
+            calls.append(url)
+            return json.dumps({"url": url}).encode("utf-8")
+
+        fetcher.fetch = fake_fetch
+        one = fetcher.fetch_json("a_meta.json", "https://huggingface.co/api/models/Org/One")
+        two = fetcher.fetch_json("a_meta.json", "https://huggingface.co/api/models/Org/Two")
+        self.assertEqual(one["url"], "https://huggingface.co/api/models/Org/One")
+        self.assertEqual(two["url"], "https://huggingface.co/api/models/Org/Two")
+        self.assertEqual(len(calls), 2)
         tmp.cleanup()
 
     def test_fetcher_without_cache_always_fetches(self):
