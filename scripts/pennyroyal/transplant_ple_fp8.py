@@ -437,10 +437,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
-    for label, path in (("base-dir", args.base_dir), ("ple-dir", args.ple_dir)):
-        if not path.is_dir():
-            refuse(f"{label} is not a directory: {path}")
     try:
+        for label, path in (("base-dir", args.base_dir), ("ple-dir", args.ple_dir)):
+            if not path.is_dir():
+                refuse(f"{label} is not a directory: {path}")
         report = assemble(args.base_dir, args.ple_dir, args.out_dir,
                           args.ple_glob, dry_run=args.dry_run)
     except Refuse as exc:

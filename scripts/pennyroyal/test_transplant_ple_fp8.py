@@ -397,6 +397,22 @@ class TotalSizeTest(TransplantFixture):
 
 
 class CliTest(unittest.TestCase):
+    def test_main_refuses_a_missing_input_directory(self):
+        # A typo in --base-dir is the commonest operator error and must print
+        # REFUSE and exit 1, not unwind a traceback past the argument check.
+        tmp = tempfile.TemporaryDirectory()
+        root = Path(tmp.name)
+        build_base(root / "base")
+        build_ple_source(root / "plesrc")
+        rc = MODULE.main([
+            "--base-dir", str(root / "gone"),
+            "--ple-dir", str(root / "plesrc"),
+            "--out-dir", str(root / "out"),
+        ])
+        self.assertEqual(rc, 1)
+        self.assertFalse((root / "out").exists())
+        tmp.cleanup()
+
     def test_main_reports_verdict(self):
         tmp = tempfile.TemporaryDirectory()
         root = Path(tmp.name)
