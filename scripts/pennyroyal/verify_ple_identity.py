@@ -91,7 +91,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ple-key", default=DEFAULT_PLE_KEY,
                         help=f"substring marking PLE tensors (default {DEFAULT_PLE_KEY!r})")
     parser.add_argument("--cache-dir", default=None,
-                        help="directory to cache fetched headers (default: temp, no reuse)")
+                        help="directory to cache revision-pinned metadata and "
+                             "fetched headers (default: temp, no reuse)")
     return parser
 
 
@@ -132,8 +133,11 @@ def verify(repo_a: str, rev_a: str, repo_b: str, rev_b: str,
     sides = {"a": (repo_a, rev_a), "b": (repo_b, rev_b)}
 
     for tag, (repo, rev) in sides.items():
-        meta = fetcher.fetch_json(f"{tag}_meta.json",
-                                  f"https://huggingface.co/api/models/{repo}")
+        # Model metadata is the one mutable document this tool reads: its URL
+        # carries no revision, so HEAD moves under the same address and a
+        # cached copy would abort a valid re-pin on phantom drift. The index and
+        # tree below are revision-pinned, therefore cacheable.
+        meta = json.loads(fetcher.fetch(f"https://huggingface.co/api/models/{repo}"))
         if meta["sha"] != rev:
             raise SystemExit(
                 f"{tag}: revision drift! {repo} HEAD is {meta['sha']}, pinned {rev}")

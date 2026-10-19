@@ -92,9 +92,11 @@ class FakeHub:
         self.blobs: dict[str, bytes] = {}
         self.docs: dict[str, object] = {}
         self.ranges: list[tuple[str, str]] = []
+        self.doc_requests: list[str] = []
 
     def fetch(self, url: str, rng: str | None = None, timeout: int = 300) -> bytes:
         if url in self.docs:
+            self.doc_requests.append(url)
             return json.dumps(self.docs[url]).encode("utf-8")
         blob = self.blobs[url]
         if rng is None:
@@ -222,6 +224,55 @@ class RangeIdentityTest(unittest.TestCase):
         self.assertEqual(report["mismatches"], [])
         self.assertEqual(report["identical_via_file_sha256"], 1)
         self.assertEqual(self.hub.tensor_ranges(), [])
+
+
+class MutableHeadCacheTest(unittest.TestCase):
+    """The revision-drift check reads mutable metadata; it may not be cached."""
+
+    SHARD = "model-ple-00000.safetensors"
+    REPO_A, REPO_B = "Org/Base", "Org/Swift"
+    REV_A1, REV_A2, REV_B = "a" * 40, "c" * 40, "b" * 40
+
+    def setUp(self):
+        self.hub = FakeHub()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        fetcher = MODULE._Fetcher(Path(tmp.name))  # the real cache, fake transport
+        fetcher.fetch = self.hub.fetch
+        original = MODULE._Fetcher
+        MODULE._Fetcher = lambda cache_dir: fetcher
+        self.addCleanup(setattr, MODULE, "_Fetcher", original)
+        blob = shard_bytes({NGRAM0: {"dtype": "F8_E4M3", "shape": [8],
+                                     "data_offsets": [0, 8]}}, b"S" * 8)
+        for repo, rev in ((self.REPO_A, self.REV_A1), (self.REPO_A, self.REV_A2),
+                          (self.REPO_B, self.REV_B)):
+            self.hub.blobs[hub_url(repo, rev, self.SHARD)] = blob
+            self.hub.docs[hub_url(repo, rev, "model.safetensors.index.json")] = {
+                "weight_map": {NGRAM0: self.SHARD}}
+            self.hub.docs[f"https://huggingface.co/api/models/{repo}/tree/{rev}"
+                          "?recursive=true&blobs=true"] = [
+                {"type": "file", "path": self.SHARD, "size": 100,
+                 "lfs": {"oid": f"{repo}@{rev[:1]}"}}]
+        self.head = f"https://huggingface.co/api/models/{self.REPO_A}"
+        self.hub.docs[self.head] = {"sha": self.REV_A1}
+        self.hub.docs[f"https://huggingface.co/api/models/{self.REPO_B}"] = {
+            "sha": self.REV_B}
+
+    def argv(self, rev_a: str) -> list[str]:
+        return ["--repo-a", self.REPO_A, "--rev-a", rev_a,
+                "--repo-b", self.REPO_B, "--rev-b", self.REV_B]
+
+    def test_advanced_head_is_not_reused_from_cache(self):
+        self.assertEqual(MODULE.main(self.argv(self.REV_A1)), 0)
+        # Org/Base gains a commit and the operator re-pins to it; the pinned
+        # artifacts are unchanged, so only the mutable HEAD moved.
+        self.hub.docs[self.head] = {"sha": self.REV_A2}
+        self.assertEqual(MODULE.main(self.argv(self.REV_A2)), 0)
+        self.assertEqual(MODULE.main(self.argv(self.REV_A2)), 0)
+        # Pinned, immutable artifacts still come from the warm cache.
+        self.assertEqual(
+            self.hub.doc_requests.count(
+                hub_url(self.REPO_A, self.REV_A2, "model.safetensors.index.json")), 1)
 
 
 class CacheTest(unittest.TestCase):
