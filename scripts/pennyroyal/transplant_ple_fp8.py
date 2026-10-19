@@ -45,7 +45,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-PLE_MODULE = "model.language_model.layers.1.ple."
+PLE_LAYER = 1  # the one PLE layer this recipe documents and transplants
+PLE_MODULE = f"model.language_model.layers.{PLE_LAYER}.ple."
+PLE_MODULE_TAIL = PLE_MODULE + "ple_embedding"  # the module the engine builds
 PLE_CONFIG_KEY = "ple_embedding_dtype"
 FP8_PLE_DTYPE = "float8_e4m3fn"
 INDEX_NAME = "model.safetensors.index.json"
@@ -53,11 +55,14 @@ HEADER_SIZE_MAX = 128 * 1024 * 1024
 NGRAM_MARKER = ".ngram_embedding."
 # The engine binds exactly one weight per ngram table: <module>.ngram_embedding
 # .shard_<N>.weight (models/qwen4_exp.py raises on any other PLE weight).
-NGRAM_TABLE = re.compile(r"^shard_\d+\.weight$")
+NGRAM_TABLE = re.compile(r"^shard_(?P<part>\d+)\.weight$")
 NGRAM_SCALE = "weight_scale"
-# Qwen4ExpTextConfig defaults; the engine derives the table width from them.
+# Qwen4ExpTextConfig defaults; the engine derives the table layout from them.
 NGRAM_SIZE_DEFAULT = 3
 HEADS_PER_NGRAM_DEFAULT = 8
+VOCAB_BASE_DEFAULT = 20000000
+VOCAB_DIVISIBLE_BY_DEFAULT = 128
+SPLIT_PARTS_DEFAULT = 512
 # Element sizes for the dtypes this tool may meet in a PLE shard, used to prove
 # a declared shape matches the bytes the header reserves for it.
 ELEMENT_SIZE = {"F64": 8, "F32": 4, "F16": 2, "BF16": 2, "F8_E4M3": 1, "F8_E5M2": 1}
@@ -174,22 +179,56 @@ def validate_base(base_dir: Path) -> tuple[dict, dict[str, str]]:
     return config, base_weight_map
 
 
-def target_table_width(text_config: dict) -> int:
-    """Columns every ngram table must carry, from the base checkpoint's config.
+def _is_prime(value: int) -> bool:
+    if value < 2:
+        return False
+    if value % 2 == 0:
+        return value == 2
+    divisor = 3
+    while divisor * divisor <= value:
+        if value % divisor == 0:
+            return False
+        divisor += 2
+    return True
 
-    models/qwen4_exp.py builds the embedding as ``ple_embed_dim // ((ngram_size
-    - 1) * heads_per_ngram)`` columns per head and copies each checkpoint table
-    into it, so a table of any other width either broadcasts one column across
-    the row (one-column donors, no error, wrong embedding) or fails mid-load.
-    Config defaults follow Qwen4ExpTextConfig, and this works for a pruned base
-    whose own PLE headers are gone: the geometry lives in config.json.
+
+def _nth_prime_after(start: int, count: int) -> int:
+    """``sympy.nextprime`` applied ``count`` times, as the engine's helper does."""
+    prime = start
+    for _ in range(count):
+        prime += 1
+        while not _is_prime(prime):
+            prime += 1
+    return prime
+
+
+def ple_target(config: dict) -> dict:
+    """The layout the engine builds for the PLE layer this recipe targets.
+
+    models/qwen4_exp.py sizes the ngram embedding from the base config alone:
+    each head table is ``ple_embed_dim // ((ngram_size - 1) * heads_per_ngram)``
+    columns wide, the row count comes from ``_build_head_vocab_and_offsets``
+    (one prime per head, from ``ngram_vocab_size_base``) padded up to
+    ``make_ngram_vocab_size_divisible_by``, and ``load_weights`` copies the
+    tensor named ``shard_N.weight`` into rows ``N * ceil(rows / parts)`` onward,
+    advancing only by the rows that tensor carries. Defaults follow
+    Qwen4ExpTextConfig, and ``split_ngram_parts`` falls back to the top-level
+    copy and then to 512 like the loader's own getattr chain. Only the single
+    documented PLE layer is supported, so its ``ple_layer_index`` is 0 and the
+    head primes are the first ``ngram_heads`` after the base.
     """
-    dim = text_config.get("ple_embed_dim") or text_config.get("hidden_size")
+    text = config["text_config"]
+    ids = text.get("ple_layer_ids")
+    if ids != [PLE_LAYER + 1]:
+        refuse(f"base text_config.ple_layer_ids={ids!r}; this recipe transplants one "
+               f"PLE layer, the one it documents, enabled by ple_layer_ids="
+               f"[{PLE_LAYER + 1}] for {PLE_MODULE}*")
+    dim = text.get("ple_embed_dim") or text.get("hidden_size")
     if not isinstance(dim, int) or dim <= 0:
         refuse("base config.json gives no usable ple_embed_dim or hidden_size; the "
                "PLE target geometry cannot be established")
-    ngram_size = text_config.get("ngram_size", NGRAM_SIZE_DEFAULT)
-    heads = text_config.get("heads_per_ngram", HEADS_PER_NGRAM_DEFAULT)
+    ngram_size = text.get("ngram_size", NGRAM_SIZE_DEFAULT)
+    heads = text.get("heads_per_ngram", HEADS_PER_NGRAM_DEFAULT)
     if not isinstance(ngram_size, int) or ngram_size < 2:
         refuse(f"base ngram_size={ngram_size!r}; the loader requires an integer "
                "of 2 or more")
@@ -201,22 +240,42 @@ def target_table_width(text_config: dict) -> int:
         refuse(f"base ple_embed_dim={dim} is not divisible by the {ngram_heads} "
                "ngram heads the config declares; the loader rejects this "
                "checkpoint before any table is read")
-    return dim // ngram_heads
+    vocab_base = text.get("ngram_vocab_size_base", VOCAB_BASE_DEFAULT)
+    divisible = text.get("make_ngram_vocab_size_divisible_by",
+                         VOCAB_DIVISIBLE_BY_DEFAULT)
+    parts = text.get("split_ngram_parts", config.get("split_ngram_parts",
+                                                     SPLIT_PARTS_DEFAULT))
+    for label, value in (("ngram_vocab_size_base", vocab_base),
+                         ("make_ngram_vocab_size_divisible_by", divisible),
+                         ("split_ngram_parts", parts)):
+        if not isinstance(value, int) or value <= 0:
+            refuse(f"base {label}={value!r}; the loader expects a positive integer")
+    rows = sum(_nth_prime_after(vocab_base - 1, head + 1)
+               for head in range(ngram_heads))
+    rows = -(-rows // divisible) * divisible
+    shard_rows = -(-rows // parts)
+    return {"module": PLE_MODULE_TAIL, "width": dim // ngram_heads, "rows": rows,
+            "shard_rows": shard_rows,
+            "parts": [min(shard_rows, max(0, rows - part * shard_rows))
+                      for part in range(parts)]}
 
 
 def validate_ple_source(ple_dir: Path, ple_glob: str,
-                        table_width: int) -> tuple[list[str], dict[str, dict]]:
-    """Check the FP8 PLE shards: present, every ngram table FP8, well formed and
-    as wide as the target embedding, each module's scale bound, pure-PLE; and
-    the leader files the checkpoint takes from this side are present."""
+                        target: dict) -> tuple[list[str], dict[str, dict]]:
+    """Check the FP8 PLE shards against the target layout: present, bound to the
+    module the engine builds, every part FP8 and exactly as large as its slice,
+    the module's scale present, pure-PLE; and the leader files the checkpoint
+    takes from this side are present."""
     shards = sorted(p.name for p in ple_dir.glob(ple_glob))
     if not shards:
         refuse(f"no shards matching {ple_glob!r} in {ple_dir}")
     missing = [name for name in LEADER_FILES if not (ple_dir / name).is_file()]
     if missing:
         refuse(f"PLE source is missing leader files the checkpoint needs: {missing}")
+    bound_prefix = target["module"] + NGRAM_MARKER
     inventory: dict[str, dict] = {}
-    tables: dict[str, list[str]] = {}
+    tables: list[str] = []
+    seen: dict[int, str] = {}
     for shard in shards:
         header = read_safetensors_header(ple_dir / shard)
         for name, meta in header.items():
@@ -228,15 +287,21 @@ def validate_ple_source(ple_dir: Path, ple_glob: str,
             if name in inventory:
                 refuse(f"tensor {name} claimed twice (in {inventory[name]['shard']} "
                        f"and {shard})")
-            suffix = (name.rsplit(NGRAM_MARKER, 1)[1]
-                      if NGRAM_MARKER in name else None)
+            suffix = None
+            if NGRAM_MARKER in name:
+                if not name.startswith(bound_prefix):
+                    refuse(f"{shard}: tensor {name} sits under a module the engine "
+                           f"never builds; the FP8 PLE path binds {bound_prefix}"
+                           "shard_N.weight and its weight_scale, so these bytes "
+                           "would load as nothing")
+                suffix = name[len(bound_prefix):]
             if suffix == NGRAM_SCALE:
                 _validate_ple_scale(shard, name, meta)
-            elif suffix is not None and NGRAM_TABLE.match(suffix):
-                module = name[: name.index(NGRAM_MARKER)]
-                _validate_ple_table(shard, name, meta, table_width)
-                tables.setdefault(module, []).append(name)
-            elif suffix is not None and name.endswith(".weight"):
+            elif suffix is not None and (match := NGRAM_TABLE.match(suffix)):
+                _validate_ple_table(shard, name, meta, target, int(match.group("part")),
+                                    seen)
+                tables.append(name)
+            elif suffix is not None and suffix.endswith("weight"):
                 refuse(f"{shard}: unsupported PLE weight layout (expected "
                        f"ngram_embedding.shard_N.weight): {name}")
             elif meta["dtype"] not in {FP8_TABLE_DTYPE, "BF16"}:
@@ -245,12 +310,16 @@ def validate_ple_source(ple_dir: Path, ple_glob: str,
             inventory[name] = {"shard": shard, **meta}
     if not tables:
         refuse("no F8_E4M3 ngram tables found; the PLE source is not an FP8 checkpoint")
-    for module in sorted(tables):
-        scale = module + NGRAM_MARKER + NGRAM_SCALE
-        if scale not in inventory:
-            refuse(f"{len(tables[module])} FP8 PLE tables under {module} without "
-                   f"{scale}: an FP8 table without its per-tensor scale loads as "
-                   "garbage")
+    absent = [f"shard_{part}" for part, rows in enumerate(target["parts"])
+              if rows and part not in seen]
+    if absent:
+        refuse(f"{len(absent)} of the {len(target['parts'])} ngram parts the base "
+               f"geometry requires are missing (first: {absent[0]}); the loader "
+               "leaves those rows of the embedding unfilled")
+    scale = bound_prefix + NGRAM_SCALE
+    if scale not in inventory:
+        refuse(f"{len(tables)} FP8 PLE tables without {scale}: an FP8 table without "
+               "its per-tensor scale loads as garbage")
     return shards, inventory
 
 
@@ -266,26 +335,42 @@ def _validate_ple_scale(shard: str, name: str, meta: dict) -> None:
     _require_declared_bytes(shard, name, meta, [1])
 
 
-def _validate_ple_table(shard: str, name: str, meta: dict, table_width: int) -> None:
-    """An ngram table must be FP8, as wide as the embedding it fills, and hold
-    exactly the bytes its shape claims."""
+def _validate_ple_table(shard: str, name: str, meta: dict, target: dict,
+                        part: int, seen: dict[int, str]) -> None:
+    """An ngram part must be FP8, as wide as the embedding it fills, and hold
+    exactly the rows the loader copies for that part index."""
     if meta["dtype"] != FP8_TABLE_DTYPE:
         refuse(f"{shard}: PLE table {name} has dtype {meta['dtype']}; every ngram "
                f"table must be {FP8_TABLE_DTYPE}, because the transplanted "
                "checkpoint declares FP8 PLE end to end")
     shape = meta["shape"]
-    if len(shape) != 2 or min(shape) <= 0:
+    if len(shape) != 2 or shape[0] < 0 or shape[1] <= 0:
         refuse(f"{shard}: PLE table {name} has shape {shape}; ngram tables must be "
                "rank-2 [rows, columns] like the embedding they fill")
-    if shape[1] != table_width:
+    if shape[1] != target["width"]:
         refuse(f"{shard}: PLE table {name} is {shape[1]} columns wide, but the base "
-               f"config declares {table_width} columns per ngram head table "
+               f"config declares {target['width']} columns per ngram head table "
                "(ple_embed_dim // ((ngram_size - 1) * heads_per_ngram)); the load "
                "would broadcast or fail on this table")
+    if part >= len(target["parts"]):
+        refuse(f"{shard}: PLE table {name} is part {part}, beyond the split: the base "
+               f"divides the {target['rows']} PLE rows into {len(target['parts'])} "
+               f"parts, shard_0 to shard_{len(target['parts']) - 1}")
+    if part in seen:
+        refuse(f"{shard}: PLE table {name} is part {part} of the PLE rows, already "
+               f"carried by {seen[part]}; the loader copies one tensor per part")
+    if shape[0] != target["parts"][part]:
+        refuse(f"{shard}: PLE table {name} carries {shape[0]} rows; part {part} covers "
+               f"{target['parts'][part]} rows from row "
+               f"{part * target['shard_rows']} of the base's {target['rows']}, and "
+               "the loader advances only by the rows a part carries, so the rest of "
+               "the embedding stays empty (only the final part may be short)")
+    seen[part] = name
     _require_declared_bytes(shard, name, meta, shape)
 
 
-def _require_declared_bytes(shard: str, name: str, meta: dict, shape: list[int]) -> None:
+def _require_declared_bytes(shard: str, name: str, meta: dict,
+                            shape: list[int]) -> None:
     """A PLE tensor's byte span must cover its declared shape exactly."""
     span = meta["data_offsets"][1] - meta["data_offsets"][0]
     needed = math.prod(shape) * ELEMENT_SIZE[meta["dtype"]]
@@ -406,7 +491,7 @@ def assemble(base_dir: Path, ple_dir: Path, out_dir: Path, ple_glob: str,
                "an existing directory")
     base_config, base_weight_map = validate_base(base_dir)
     ple_shards, ple_inventory = validate_ple_source(
-        ple_dir, ple_glob, target_table_width(base_config["text_config"]))
+        ple_dir, ple_glob, ple_target(base_config))
     validate_quant_ignore(base_config, ple_inventory)
     index = build_index(base_weight_map, ple_inventory)
 

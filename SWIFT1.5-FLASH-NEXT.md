@@ -37,12 +37,19 @@ python3 scripts/pennyroyal/transplant_ple_fp8.py \
 # review the report, then re-run without --dry-run
 ```
 
-The assembler validates before it writes: base PLE dtype is BF16, FP8 shards
-are pure-PLE (`model.language_model.layers.1.ple.*` only) with every ngram
-table F8_E4M3, rank-2, byte-complete and exactly as wide as the base's own PLE
-geometry (`ple_embed_dim` over its ngram heads, from the base config so a
-pruned base is checked too), carrying their module's own per-tensor
-`weight_scale`, the base's `quantization_config.ignore`
+The assembler validates before it writes: base PLE dtype is BF16, the base
+config enables exactly the one PLE layer this recipe transplants
+(`text_config.ple_layer_ids = [2]`, checkpoint layer 1), FP8 shards are
+pure-PLE (`model.language_model.layers.1.ple.*` only) and bound to the module
+the engine builds (`ple_embedding.ngram_embedding`), every ngram table is
+F8_E4M3, rank-2, byte-complete, exactly `ple_embed_dim // ((ngram_size - 1) *
+heads_per_ngram)` columns wide, and covers its slice of the target rows: the
+part set is `shard_0 .. shard_(split_ngram_parts-1)`, each part
+`ceil(rows / split_ngram_parts)` rows after the head-vocab padding, only the
+final part legitimately shorter, with the module's own per-tensor
+`weight_scale`. All of that comes from the base `config.json`, so a base whose
+own PLE shards were pruned is checked the same way. The base's
+`quantization_config.ignore`
 covers every transplanted tensor (the FP8 bytes are never offered to the NVFP4
 dequant path), the transplant boundary is shard-aligned, and the copy plan
 agrees with the generated index. Every refusal prints `REFUSE:` with the
