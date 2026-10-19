@@ -63,9 +63,12 @@ HEADS_PER_NGRAM_DEFAULT = 8
 VOCAB_BASE_DEFAULT = 20000000
 VOCAB_DIVISIBLE_BY_DEFAULT = 128
 SPLIT_PARTS_DEFAULT = 512
-# Element sizes for the dtypes this tool may meet in a PLE shard, used to prove
-# a declared shape matches the bytes the header reserves for it.
-ELEMENT_SIZE = {"F64": 8, "F32": 4, "F16": 2, "BF16": 2, "F8_E4M3": 1, "F8_E5M2": 1}
+# Element sizes for every dtype the safetensors format defines (verified against
+# the reader), used to prove a declared shape matches the bytes its range holds.
+ELEMENT_SIZE = {"F64": 8, "F32": 4, "F16": 2, "BF16": 2,
+                "I64": 8, "I32": 4, "I16": 2, "I8": 1, "U8": 1,
+                "U16": 2, "U32": 4, "U64": 8, "BOOL": 1,
+                "F8_E4M3": 1, "F8_E5M2": 1, "F8_E8M0": 1}
 FP8_TABLE_DTYPE = "F8_E4M3"
 ALLOWED_SCALES = ("F64", "F32", "F16", "BF16", "F8_E4M3", "F8_E5M2")
 # Non-shard files the assembled checkpoint takes from the FP8 PLE source
@@ -91,12 +94,17 @@ def refuse(why: str) -> None:
 
 
 def read_safetensors_header(path: Path) -> dict:
-    """Parse a safetensors file's tensor metadata (names, dtypes, offsets).
+    """Parse a safetensors file's tensor metadata (names, dtypes, offsets) and
+    prove the data section it describes is complete and correctly laid out.
 
-    A partial download has a complete header and a short data section, so the
-    declared payload is checked against the bytes on disk here: every caller
-    runs before staging, and a shard missing tensor bytes must REFUSE rather
-    than ship a checkpoint whose index points at absent bytes.
+    These are the reader's own rules, checked here so a bad shard is refused
+    before staging instead of halfway through a model load, and so the payload
+    proof cannot be satisfied by a complete header over a truncated download:
+      * every entry is a tensor: a known dtype, a shape, and a byte range of
+        exactly prod(shape) * itemsize bytes (0 bytes for an empty tensor);
+      * the ranges pack the data section in order, no overlaps and no gaps;
+      * the file ends where the last tensor ends, so nothing is truncated and
+        no undeclared bytes ride along.
     """
     with path.open("rb") as stream:
         raw_size = stream.read(8)
@@ -109,12 +117,42 @@ def read_safetensors_header(path: Path) -> dict:
     if len(raw) != header_size:
         refuse(f"{path.name}: truncated header")
     header = json.loads(raw)
-    declared = max((meta["data_offsets"][1] for name, meta in header.items()
-                    if name != "__metadata__"), default=0)
+    ranges = []
+    for name, meta in header.items():
+        if name == "__metadata__":
+            continue
+        dtype = meta.get("dtype") if isinstance(meta, dict) else None
+        if dtype not in ELEMENT_SIZE:
+            refuse(f"{path.name}: tensor {name} is not a tensor entry the format "
+                   f"defines (dtype {dtype!r})")
+        shape, offsets = meta.get("shape"), meta.get("data_offsets")
+        if (not isinstance(shape, list)
+                or not all(isinstance(dim, int) and dim >= 0 for dim in shape)
+                or not isinstance(offsets, list) or len(offsets) != 2
+                or not all(isinstance(value, int) and value >= 0 for value in offsets)
+                or offsets[0] > offsets[1]):
+            refuse(f"{path.name}: tensor {name} has a malformed shape or "
+                   f"data_offsets: {meta}")
+        needed = math.prod(shape) * ELEMENT_SIZE[dtype]
+        if offsets[1] - offsets[0] != needed:
+            refuse(f"{path.name}: tensor {name} reserves {offsets[1] - offsets[0]} "
+                   f"bytes for shape {shape} of {dtype}, which needs {needed}")
+        ranges.append((offsets[0], offsets[1], name))
+    cursor = 0
+    for begin, end, name in sorted(ranges):
+        if begin != cursor:
+            relation = ("overlaps" if begin < cursor
+                        else "leaves a gap after the bytes already claimed")
+            refuse(f"{path.name}: tensor {name} {relation}: safetensors packs the "
+                   "tensors it declares in offset order")
+        cursor = end
     present = path.stat().st_size - (8 + header_size)
-    if present < declared:
-        refuse(f"{path.name}: truncated payload, the header declares {declared} "
+    if present < cursor:
+        refuse(f"{path.name}: truncated payload, the header declares {cursor} "
                f"bytes of tensors and {max(present, 0)} are on disk")
+    if present > cursor:
+        refuse(f"{path.name}: {present - cursor} bytes at the end of the data "
+               "section are not claimed by any tensor")
     return header
 
 
@@ -333,7 +371,6 @@ def _validate_ple_scale(shard: str, name: str, meta: dict) -> None:
         refuse(f"{shard}: {name} has shape {meta['shape']}; the loader's "
                "weight_scale buffer is a single element and a differing shape "
                "raises at load time")
-    _require_declared_bytes(shard, name, meta, [1])
 
 
 def _validate_ple_table(shard: str, name: str, meta: dict, target: dict,
@@ -367,17 +404,6 @@ def _validate_ple_table(shard: str, name: str, meta: dict, target: dict,
                "the loader advances only by the rows a part carries, so the rest of "
                "the embedding stays empty (only the final part may be short)")
     seen[part] = name
-    _require_declared_bytes(shard, name, meta, shape)
-
-
-def _require_declared_bytes(shard: str, name: str, meta: dict,
-                            shape: list[int]) -> None:
-    """A PLE tensor's byte span must cover its declared shape exactly."""
-    span = meta["data_offsets"][1] - meta["data_offsets"][0]
-    needed = math.prod(shape) * ELEMENT_SIZE[meta["dtype"]]
-    if span != needed:
-        refuse(f"{shard}: PLE tensor {name} reserves {span} bytes for shape "
-               f"{shape} of {meta['dtype']}, which needs {needed}")
 
 
 def validate_quant_ignore(config: dict, ple_inventory: dict[str, dict]) -> None:
