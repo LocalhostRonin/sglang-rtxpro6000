@@ -492,10 +492,37 @@ class PLETableCensusTest(TransplantFixture):
     def set_text_config(self, **values):
         config = json.loads((self.base / "config.json").read_text())
         config["text_config"].update(values)
-        for key in ("hidden_size", "ple_embed_dim"):
-            if key in values and values[key] is None:
+        for key, value in values.items():
+            if value is None:
                 del config["text_config"][key]
         (self.base / "config.json").write_text(json.dumps(config))
+        return config
+
+    def write_config(self, config: dict):
+        (self.base / "config.json").write_text(json.dumps(config))
+
+    def test_ignores_split_ngram_parts_outside_text_config(self):
+        # Qwen4ExpConfig drops the top-level split_ngram_parts copy whenever a
+        # nested text_config exists, so the loader never sees it and uses its
+        # own default of 512 parts: 7 rows of 1 row each, not the 4+3 the raw
+        # dictionary suggests. Reading the raw copy made the assembler place
+        # part 1 at row 4 while the runtime places it at row 1.
+        for top in (2, 512, None):
+            config = self.set_text_config(split_ngram_parts=None)
+            if top is not None:
+                config["split_ngram_parts"] = top
+            self.write_config(config)
+            message = self.refuse()
+            self.assertIn("part 0", message)
+            self.assertIn("1 rows", message)
+
+    def test_nested_split_ngram_parts_is_authoritative(self):
+        # The same top-level value beside a nested one changes nothing: the
+        # donor's 4+3 parts are what the runtime will copy.
+        config = self.set_text_config(split_ngram_parts=2)
+        config["split_ngram_parts"] = 512
+        self.write_config(config)
+        self.assertTrue(self.assemble()["files_copied"])
 
     def test_refuses_base_without_usable_ple_geometry(self):
         self.set_text_config(ple_embed_dim=None, hidden_size=None)

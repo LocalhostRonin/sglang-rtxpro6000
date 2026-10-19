@@ -211,11 +211,13 @@ def ple_target(config: dict) -> dict:
     (one prime per head, from ``ngram_vocab_size_base``) padded up to
     ``make_ngram_vocab_size_divisible_by``, and ``load_weights`` copies the
     tensor named ``shard_N.weight`` into rows ``N * ceil(rows / parts)`` onward,
-    advancing only by the rows that tensor carries. Defaults follow
-    Qwen4ExpTextConfig, and ``split_ngram_parts`` falls back to the top-level
-    copy and then to 512 like the loader's own getattr chain. Only the single
-    documented PLE layer is supported, so its ``ple_layer_index`` is 0 and the
-    head primes are the first ``ngram_heads`` after the base.
+    advancing only by the rows that tensor carries. Only the single documented
+    PLE layer is supported, so its ``ple_layer_index`` is 0 and the head primes
+    are the first ``ngram_heads`` after the base. Defaults follow
+    Qwen4ExpTextConfig, and only its nested text_config is authoritative here:
+    Qwen4ExpConfig drops a top-level split_ngram_parts copy as soon as a nested
+    text_config exists, and a base without one is refused for having no
+    text_config at all, so the loader's top-level fallback can never apply.
     """
     text = config["text_config"]
     ids = text.get("ple_layer_ids")
@@ -243,8 +245,7 @@ def ple_target(config: dict) -> dict:
     vocab_base = text.get("ngram_vocab_size_base", VOCAB_BASE_DEFAULT)
     divisible = text.get("make_ngram_vocab_size_divisible_by",
                          VOCAB_DIVISIBLE_BY_DEFAULT)
-    parts = text.get("split_ngram_parts", config.get("split_ngram_parts",
-                                                     SPLIT_PARTS_DEFAULT))
+    parts = text.get("split_ngram_parts", SPLIT_PARTS_DEFAULT)
     for label, value in (("ngram_vocab_size_base", vocab_base),
                          ("make_ngram_vocab_size_divisible_by", divisible),
                          ("split_ngram_parts", parts)):
