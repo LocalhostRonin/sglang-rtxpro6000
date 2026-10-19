@@ -80,6 +80,138 @@ class PureFunctionTest(unittest.TestCase):
         self.assertEqual(MODULE.DTYPE_SIZE["BF16"], 2)
 
 
+class FakeHub:
+    """Stand-in for the Hub: serves absolute byte ranges over in-memory files.
+
+    HTTP Range offsets are absolute in the file, exactly as a real server (and
+    huggingface.co) treats them, so a range built from safetensors
+    ``data_offsets`` without the file's header size fetches the wrong bytes.
+    """
+
+    def __init__(self):
+        self.blobs: dict[str, bytes] = {}
+        self.docs: dict[str, object] = {}
+        self.ranges: list[tuple[str, str]] = []
+
+    def fetch(self, url: str, rng: str | None = None, timeout: int = 300) -> bytes:
+        if url in self.docs:
+            return json.dumps(self.docs[url]).encode("utf-8")
+        blob = self.blobs[url]
+        if rng is None:
+            return blob
+        self.ranges.append((url, rng))
+        start, stop = (int(part) for part in rng.removeprefix("bytes=").split("-"))
+        return blob[start:stop + 1]
+
+    def fetch_json(self, cache_key: str, url: str) -> dict:
+        return json.loads(self.fetch(url))
+
+    def tensor_ranges(self) -> list[tuple[str, str]]:
+        """Range requests beyond the two header probes of a shard."""
+        return [(url, rng) for url, rng in self.ranges
+                if not rng.startswith("bytes=0-")]
+
+
+def hub_url(repo: str, rev: str, fname: str) -> str:
+    return f"https://huggingface.co/{repo}/resolve/{rev}/{fname}"
+
+
+def shard_bytes(tensors: dict, payload: bytes, extra_pad: int = 0) -> bytes:
+    """A real safetensors prefix: 8-byte size, 8-aligned header, then payload."""
+    body = json.dumps(tensors, separators=(",", ":")).encode("utf-8")
+    body += b" " * ((-len(body)) % 8)
+    return struct.pack("<Q", len(body) + extra_pad) + body + b" " * extra_pad + payload
+
+
+def data_start(blob: bytes) -> int:
+    return 8 + struct.unpack("<Q", blob[:8])[0]
+
+
+class RangeIdentityTest(unittest.TestCase):
+    """End-to-end ``verify()`` over synthetic shards, asserting real ranges."""
+
+    SHARD = "model-ple-00000.safetensors"
+    REPO_A, REV_A = "Org/Base", "a" * 40
+    REPO_B, REV_B = "Org/Swift", "b" * 40
+
+    def setUp(self):
+        self.hub = FakeHub()
+        original = MODULE._Fetcher
+        MODULE._Fetcher = lambda cache_dir: self.hub
+        self.addCleanup(setattr, MODULE, "_Fetcher", original)
+        weight_map = {NGRAM0: self.SHARD, ATTN: "model-00001.safetensors"}
+        for repo, rev in ((self.REPO_A, self.REV_A), (self.REPO_B, self.REV_B)):
+            self.hub.docs[f"https://huggingface.co/api/models/{repo}"] = {"sha": rev}
+            self.hub.docs[hub_url(repo, rev, "model.safetensors.index.json")] = {
+                "weight_map": weight_map}
+            self.hub.docs[f"https://huggingface.co/api/models/{repo}/tree/{rev}"
+                          "?recursive=true&blobs=true"] = self.tree(repo, rev)
+
+    def tree(self, repo: str, rev: str) -> list[dict]:
+        return [{"type": "file", "path": self.SHARD, "size": 100, "lfs": {"oid": None}}]
+
+    def serve(self, repo: str, rev: str, blob: bytes, oid: str) -> None:
+        self.hub.blobs[hub_url(repo, rev, self.SHARD)] = blob
+        self.hub.docs[f"https://huggingface.co/api/models/{repo}/tree/{rev}"
+                      "?recursive=true&blobs=true"][0]["lfs"]["oid"] = oid
+
+    def run_verify(self):
+        return MODULE.verify(self.REPO_A, self.REV_A, self.REPO_B, self.REV_B)
+
+    def test_changed_payload_bytes_are_a_mismatch(self):
+        header = {NGRAM0: {"dtype": "F8_E4M3", "shape": [8],
+                           "data_offsets": [0, 8]}}
+        self.serve(self.REPO_A, self.REV_A, shard_bytes(header, b"A" * 8), "oid-a")
+        self.serve(self.REPO_B, self.REV_B, shard_bytes(header, b"B" * 8), "oid-b")
+        report = self.run_verify()
+        self.assertEqual(report["mismatches"], [NGRAM0])
+
+    def test_changed_first_and_last_payload_bytes_are_a_mismatch(self):
+        header = {NGRAM0: {"dtype": "F8_E4M3", "shape": [8],
+                           "data_offsets": [0, 8]}}
+        self.serve(self.REPO_A, self.REV_A, shard_bytes(header, b"A" * 7 + b"B"), "1")
+        self.serve(self.REPO_B, self.REV_B, shard_bytes(header, b"A" + b"A" * 7), "2")
+        self.assertEqual(self.run_verify()["mismatches"], [NGRAM0])
+        self.serve(self.REPO_A, self.REV_A, shard_bytes(header, b"B" + b"A" * 7), "3")
+        self.serve(self.REPO_B, self.REV_B, shard_bytes(header, b"A" * 8), "4")
+        self.assertEqual(self.run_verify()["mismatches"], [NGRAM0])
+
+    def test_tensor_range_uses_each_files_own_data_offset(self):
+        # Same tensor bytes, same parsed header, different header padding:
+        # the data sections start at different absolute offsets.
+        header = {NGRAM0: {"dtype": "F8_E4M3", "shape": [8],
+                           "data_offsets": [0, 8]}}
+        blob_a = shard_bytes(header, b"S" * 8)
+        blob_b = shard_bytes(header, b"S" * 8, extra_pad=48)
+        self.assertNotEqual(data_start(blob_a), data_start(blob_b))
+        self.assertEqual(MODULE.parse_safetensors_header(blob_a),
+                         MODULE.parse_safetensors_header(blob_b))
+        self.serve(self.REPO_A, self.REV_A, blob_a, "1")
+        self.serve(self.REPO_B, self.REV_B, blob_b, "2")
+        report = self.run_verify()
+        self.assertEqual(report["mismatches"], [])
+        self.assertEqual(
+            sorted(self.hub.tensor_ranges()),
+            [(hub_url(self.REPO_A, self.REV_A, self.SHARD),
+              f"bytes={data_start(blob_a)}-{data_start(blob_a) + 7}"),
+             (hub_url(self.REPO_B, self.REV_B, self.SHARD),
+              f"bytes={data_start(blob_b)}-{data_start(blob_b) + 7}")])
+        self.assertEqual(report["tensors"][NGRAM0]["byte_ranges"],
+                         {"a": [data_start(blob_a), data_start(blob_a) + 8],
+                          "b": [data_start(blob_b), data_start(blob_b) + 8]})
+
+    def test_equal_shard_file_sha256_needs_no_tensor_range(self):
+        header = {NGRAM0: {"dtype": "F8_E4M3", "shape": [8],
+                           "data_offsets": [0, 8]}}
+        blob = shard_bytes(header, b"S" * 8)
+        self.serve(self.REPO_A, self.REV_A, blob, "same-oid")
+        self.serve(self.REPO_B, self.REV_B, blob, "same-oid")
+        report = self.run_verify()
+        self.assertEqual(report["mismatches"], [])
+        self.assertEqual(report["identical_via_file_sha256"], 1)
+        self.assertEqual(self.hub.tensor_ranges(), [])
+
+
 class CacheTest(unittest.TestCase):
     def test_fetcher_cache_writes_and_reuses(self):
         tmp = tempfile.TemporaryDirectory()

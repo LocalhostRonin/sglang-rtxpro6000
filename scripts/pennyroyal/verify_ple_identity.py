@@ -159,23 +159,40 @@ def verify(repo_a: str, rev_a: str, repo_b: str, rev_b: str,
     print(f"shards proven identical by file SHA256: {len(proven)}/{len(ple_shards)}")
     print(f"shards needing tensor-level comparison : {diff_shards}")
 
-    def header_json(tag: str, shard: str) -> dict:
-        url = _resolve(*sides[tag], shard)
-        size = int.from_bytes(fetcher.fetch(url, "bytes=0-7"), "little")
-        raw = fetcher.fetch(url, f"bytes=0-{size + 7}")
-        return parse_safetensors_header(raw)
+    def header_json(tag: str, shard: str) -> tuple[dict, int]:
+        """Parsed header of one side's shard plus where its data section starts.
 
+        ``data_offsets`` are relative to the byte right after this file's own
+        8-byte size field and header block, so the absolute offset depends on
+        that file's header length: two layout-identical shards can pad their
+        headers differently and still carry identical tensors.
+        """
+        key = (tag, shard)
+        if key not in headers:
+            url = _resolve(*sides[tag], shard)
+            size = int.from_bytes(fetcher.fetch(url, "bytes=0-7"), "little")
+            raw = fetcher.fetch(url, f"bytes=0-{size + 7}")
+            headers[key] = (parse_safetensors_header(raw), 8 + size)
+        return headers[key]
+
+    headers: dict[tuple[str, str], tuple[dict, int]] = {}
     inventory: dict[str, dict] = {}
     for shard in ple_shards:
-        for name, meta in tensor_inventory(header_json("a", shard), ple_key).items():
+        header, _ = header_json("a", shard)
+        for name, meta in tensor_inventory(header, ple_key).items():
             inventory.setdefault(name, {"shard": shard, **meta})
+    data_start: dict[tuple[str, str], int] = {}
     for shard in diff_shards:
-        if header_json("a", shard) != header_json("b", shard):
+        header_a, start_a = header_json("a", shard)
+        header_b, start_b = header_json("b", shard)
+        if header_a != header_b:
             raise SystemExit(f"header mismatch in {shard}: layouts are not aligned")
+        data_start[("a", shard)], data_start[("b", shard)] = start_a, start_b
 
     mismatches: list[str] = []
 
     def hash_range(tag: str, shard: str, start: int, end: int) -> str:
+        """SHA256 of [start, end) of one side's shard, absolute file offsets."""
         url = _resolve(*sides[tag], shard)
         digest = hashlib.sha256()
         pos = start
@@ -196,8 +213,12 @@ def verify(repo_a: str, rev_a: str, repo_b: str, rev_b: str,
         for name in to_check:
             shard = inventory[name]["shard"]
             lo, hi = inventory[name]["data_offsets"]
-            futures[(name, "a")] = pool.submit(hash_range, "a", shard, lo, hi)
-            futures[(name, "b")] = pool.submit(hash_range, "b", shard, lo, hi)
+            ranges = {tag: (lo + data_start[(tag, shard)],
+                            hi + data_start[(tag, shard)]) for tag in ("a", "b")}
+            inventory[name]["byte_ranges"] = {tag: list(span)
+                                              for tag, span in ranges.items()}
+            for tag, (start, end) in ranges.items():
+                futures[(name, tag)] = pool.submit(hash_range, tag, shard, start, end)
         for name in to_check:
             hash_a = futures[(name, "a")].result()
             hash_b = futures[(name, "b")].result()
