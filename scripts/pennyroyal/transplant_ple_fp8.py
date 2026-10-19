@@ -83,7 +83,13 @@ def refuse(why: str) -> None:
 
 
 def read_safetensors_header(path: Path) -> dict:
-    """Parse a safetensors file's tensor metadata (names, dtypes, offsets)."""
+    """Parse a safetensors file's tensor metadata (names, dtypes, offsets).
+
+    A partial download has a complete header and a short data section, so the
+    declared payload is checked against the bytes on disk here: every caller
+    runs before staging, and a shard missing tensor bytes must REFUSE rather
+    than ship a checkpoint whose index points at absent bytes.
+    """
     with path.open("rb") as stream:
         raw_size = stream.read(8)
         if len(raw_size) != 8:
@@ -94,7 +100,14 @@ def read_safetensors_header(path: Path) -> dict:
         raw = stream.read(header_size)
     if len(raw) != header_size:
         refuse(f"{path.name}: truncated header")
-    return json.loads(raw)
+    header = json.loads(raw)
+    declared = max((meta["data_offsets"][1] for name, meta in header.items()
+                    if name != "__metadata__"), default=0)
+    present = path.stat().st_size - (8 + header_size)
+    if present < declared:
+        refuse(f"{path.name}: truncated payload, the header declares {declared} "
+               f"bytes of tensors and {max(present, 0)} are on disk")
+    return header
 
 
 def load_json(path: Path, label: str) -> dict:

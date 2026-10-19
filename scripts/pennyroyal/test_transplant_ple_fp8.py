@@ -341,6 +341,32 @@ class PLETableCensusTest(TransplantFixture):
         self.assertEqual(self.assemble()["ple_tensors"], 3)
 
 
+class TruncationTest(TransplantFixture):
+    """A complete header is not a complete file: the payload must be there."""
+
+    def truncate(self, path: Path, keep: int) -> None:
+        blob = path.read_bytes()
+        header_size = struct.unpack("<Q", blob[:8])[0]
+        path.write_bytes(blob[:8 + header_size + keep])
+
+    def test_refuses_truncated_payload_before_staging(self):
+        # The header declares 34 bytes of tensors, 24 are on disk.
+        self.truncate(self.ple / FP8_SHARD, 24)
+        message = self.refuse()
+        self.assertIn("truncated payload", message)
+        self.assertIn("34", message)
+        self.assertFalse((self.root / "out").exists())
+        self.assertFalse(list(self.root.glob("out.staging.*")))
+
+    def test_refuses_truncated_base_shard(self):
+        self.truncate(self.base / BASE_PLE_SHARD, 63)
+        self.assertIn("truncated payload", self.refuse())
+
+    def test_accepts_a_shard_that_is_exactly_its_declared_size(self):
+        self.truncate(self.ple / FP8_SHARD, 34)  # no spare padding, still whole
+        self.assertTrue(self.assemble()["total_size"])
+
+
 class CliTest(unittest.TestCase):
     def test_main_reports_verdict(self):
         tmp = tempfile.TemporaryDirectory()
