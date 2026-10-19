@@ -200,6 +200,18 @@ class RangeIdentityTest(unittest.TestCase):
                          {"a": [data_start(blob_a), data_start(blob_a) + 8],
                           "b": [data_start(blob_b), data_start(blob_b) + 8]})
 
+    def test_cli_exit_code_carries_the_verdict(self):
+        # main() is the operator-facing proof: 0 = VERIFIED, 1 = NOT VERIFIED.
+        header = {NGRAM0: {"dtype": "F8_E4M3", "shape": [8],
+                           "data_offsets": [0, 8]}}
+        argv = ["--repo-a", self.REPO_A, "--rev-a", self.REV_A,
+                "--repo-b", self.REPO_B, "--rev-b", self.REV_B]
+        self.serve(self.REPO_A, self.REV_A, shard_bytes(header, b"A" * 8), "1")
+        self.serve(self.REPO_B, self.REV_B, shard_bytes(header, b"B" * 8), "2")
+        self.assertEqual(MODULE.main(argv), 1)
+        self.serve(self.REPO_B, self.REV_B, shard_bytes(header, b"A" * 8), "3")
+        self.assertEqual(MODULE.main(argv), 0)
+
     def test_equal_shard_file_sha256_needs_no_tensor_range(self):
         header = {NGRAM0: {"dtype": "F8_E4M3", "shape": [8],
                            "data_offsets": [0, 8]}}
